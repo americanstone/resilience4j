@@ -17,41 +17,44 @@ package io.github.resilience4j.micronaut.timelimiter;
 
 import io.github.resilience4j.micronaut.BaseInterceptor;
 import io.github.resilience4j.micronaut.ResilienceInterceptPhase;
+import io.github.resilience4j.micronaut.util.PublisherExtension;
+import io.github.resilience4j.retry.RetryConfig;
 import io.github.resilience4j.timelimiter.TimeLimiter;
+import io.github.resilience4j.timelimiter.TimeLimiterConfig;
 import io.github.resilience4j.timelimiter.TimeLimiterRegistry;
-import io.github.resilience4j.timelimiter.transformer.TimeLimiterTransformer;
 import io.micronaut.aop.InterceptedMethod;
+import io.micronaut.aop.InterceptorBean;
 import io.micronaut.aop.MethodInterceptor;
 import io.micronaut.aop.MethodInvocationContext;
-import io.micronaut.context.BeanContext;
 import io.micronaut.context.ExecutionHandleLocator;
 import io.micronaut.context.annotation.Requires;
 import io.micronaut.core.annotation.AnnotationValue;
 import io.micronaut.inject.ExecutableMethod;
 import io.micronaut.inject.MethodExecutionHandle;
 import io.micronaut.scheduling.TaskExecutors;
-import io.reactivex.Flowable;
+import jakarta.inject.Named;
+import jakarta.inject.Singleton;
 
-import javax.inject.Named;
-import javax.inject.Singleton;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
 
-@Singleton
+@InterceptorBean(io.github.resilience4j.micronaut.annotation.TimeLimiter.class)
 @Requires(beans = TimeLimiterRegistry.class)
 public class TimeLimiterInterceptor extends BaseInterceptor implements MethodInterceptor<Object,Object> {
 
     private final TimeLimiterRegistry timeLimiterRegistry;
     private final ExecutionHandleLocator executionHandleLocator;
     private final ScheduledExecutorService executorService;
+    private final PublisherExtension extension;
 
-    public TimeLimiterInterceptor(ExecutionHandleLocator executionHandleLocator, TimeLimiterRegistry timeLimiterRegistry, @Named(TaskExecutors.SCHEDULED) ExecutorService executorService) {
+    public TimeLimiterInterceptor(ExecutionHandleLocator executionHandleLocator, TimeLimiterRegistry timeLimiterRegistry, @Named(TaskExecutors.SCHEDULED) ExecutorService executorService, PublisherExtension extension) {
         this.executionHandleLocator = executionHandleLocator;
         this.timeLimiterRegistry = timeLimiterRegistry;
         this.executorService = (ScheduledExecutorService) executorService;
+        this.extension = extension;
     }
 
     @Override
@@ -67,7 +70,7 @@ public class TimeLimiterInterceptor extends BaseInterceptor implements MethodInt
      */
     @Override
     public Optional<? extends MethodExecutionHandle<?, Object>> findFallbackMethod(MethodInvocationContext<Object, Object> context) {
-        ExecutableMethod executableMethod = context.getExecutableMethod();
+        ExecutableMethod<Object, Object> executableMethod = context.getExecutableMethod();
         final String fallbackMethod = executableMethod.stringValue(io.github.resilience4j.micronaut.annotation.TimeLimiter.class, "fallbackMethod").orElse("");
         Class<?> declaringType = context.getDeclaringType();
         return executionHandleLocator.findExecutionHandle(declaringType, fallbackMethod, context.getArgumentTypes());
@@ -80,17 +83,22 @@ public class TimeLimiterInterceptor extends BaseInterceptor implements MethodInt
             return context.proceed();
         }
 
-        ExecutableMethod executableMethod = context.getExecutableMethod();
-        final String name = executableMethod.stringValue(io.github.resilience4j.micronaut.annotation.TimeLimiter.class).orElse("default");
-        TimeLimiter timeLimiter = this.timeLimiterRegistry.timeLimiter(name);
+        ExecutableMethod<Object, Object> executableMethod = context.getExecutableMethod();
+        final String name = executableMethod.stringValue(io.github.resilience4j.micronaut.annotation.TimeLimiter.class, "name").orElse("default");
+        TimeLimiterConfig config = this.timeLimiterRegistry.getConfiguration(name)
+                .orElse(this.timeLimiterRegistry.getDefaultConfig());
+        TimeLimiter timeLimiter = this.timeLimiterRegistry.timeLimiter(name, config);
 
         InterceptedMethod interceptedMethod = InterceptedMethod.of(context);
         try {
             switch (interceptedMethod.resultType()) {
                 case PUBLISHER:
-                    return interceptedMethod.handleResult(fallbackReactiveTypes(
-                        Flowable.fromPublisher(interceptedMethod.interceptResultAsPublisher()).compose(TimeLimiterTransformer.of(timeLimiter)),
-                        context));
+                    return interceptedMethod.handleResult(
+                        extension.fallbackPublisher(
+                            extension.timeLimiter(interceptedMethod.interceptResultAsPublisher(), timeLimiter),
+                            context,
+                            this::findFallbackMethod));
+
                 case COMPLETION_STAGE:
                     return interceptedMethod.handleResult(
                         fallbackForFuture(

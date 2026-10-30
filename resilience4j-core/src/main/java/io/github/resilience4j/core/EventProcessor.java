@@ -18,63 +18,70 @@
  */
 package io.github.resilience4j.core;
 
-import io.github.resilience4j.core.lang.Nullable;
-
-import java.util.List;
+import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CopyOnWriteArraySet;
 
 public class EventProcessor<T> implements EventPublisher<T> {
 
-    final List<EventConsumer<T>> onEventConsumers = new CopyOnWriteArrayList<>();
-    final ConcurrentMap<String, List<EventConsumer<T>>> eventConsumerMap = new ConcurrentHashMap<>();
-    private boolean consumerRegistered;
+    final Set<EventConsumer<T>> onEventConsumers = new CopyOnWriteArraySet<>();
+    final ConcurrentHashMap<String, CopyOnWriteArraySet<EventConsumer<T>>> eventConsumerMap = new ConcurrentHashMap<>();
 
+    /**
+     * Checks if any consumers are currently registered.
+     * <p>This method directly checks the actual consumer collections to provide
+     * accurate information about the current state, rather than relying on a flag
+     * that might become stale if consumers were ever to be removed in the future.
+     *
+     * @return true if at least one consumer is registered
+     */
     public boolean hasConsumers() {
-        return consumerRegistered;
+        return !onEventConsumers.isEmpty() || !eventConsumerMap.isEmpty();
     }
 
+    /**
+     * Registers a consumer for events of the given class name.
+     *
+     * @param className     the fully qualified class name of the event type
+     * @param eventConsumer the event consumer to register
+     * @throws NullPointerException if {@code className} or {@code eventConsumer} is {@code null}
+     */
     @SuppressWarnings("unchecked")
-    public synchronized void registerConsumer(String className, EventConsumer<? extends T> eventConsumer) {
-        this.eventConsumerMap.compute(className, (k, consumers) -> {
-            if (consumers == null) {
-                consumers = new CopyOnWriteArrayList<>();
-                consumers.add((EventConsumer<T>) eventConsumer);
-                return consumers;
-            } else {
-                consumers.add((EventConsumer<T>) eventConsumer);
-                return consumers;
-            }
-        });
-        this.consumerRegistered = true;
+    public void registerConsumer(String className, EventConsumer<? extends T> eventConsumer) {
+        Objects.requireNonNull(className, "className");
+        Objects.requireNonNull(eventConsumer, "eventConsumer");
+
+        CopyOnWriteArraySet<EventConsumer<T>> set =
+            eventConsumerMap.computeIfAbsent(className, k -> new CopyOnWriteArraySet<>());
+
+        set.add((EventConsumer<T>) eventConsumer);
     }
 
     public <E extends T> boolean processEvent(E event) {
         boolean consumed = false;
-        final List<EventConsumer<T>> onEventConsumers = this.onEventConsumers;
+
         if (!onEventConsumers.isEmpty()) {
-            for (int i = 0, size = onEventConsumers.size(); i < size; i++) {
-                onEventConsumers.get(i).consumeEvent(event);
-            }
+            for (EventConsumer<T> c : onEventConsumers) c.consumeEvent(event);
             consumed = true;
         }
 
-        if (!eventConsumerMap.isEmpty()) {
-            final List<EventConsumer<T>> consumers = this.eventConsumerMap.get(event.getClass().getName());
-            if (consumers != null && !consumers.isEmpty()) {
-                for (int i = 0, size = consumers.size(); i < size; i++) {
-                    consumers.get(i).consumeEvent(event);
-                }
-                consumed = true;
-            }
+        CopyOnWriteArraySet<EventConsumer<T>> set = eventConsumerMap.get(event.getClass().getName());
+        if (set != null && !set.isEmpty()) {
+            for (EventConsumer<T> c : set) c.consumeEvent(event);
+            consumed = true;
         }
         return consumed;
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * @throws NullPointerException if {@code onEventConsumer} is {@code null}
+     */
     @Override
-    public synchronized void onEvent(@Nullable EventConsumer<T> onEventConsumer) {
-        this.onEventConsumers.add(onEventConsumer);
-        this.consumerRegistered = true;
+    public void onEvent(EventConsumer<T> onEventConsumer) {
+        Objects.requireNonNull(onEventConsumer, "eventConsumer must not be null");
+        onEventConsumers.add(onEventConsumer);
     }
 }

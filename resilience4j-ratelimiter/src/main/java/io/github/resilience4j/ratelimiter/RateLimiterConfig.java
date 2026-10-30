@@ -18,7 +18,7 @@
  */
 package io.github.resilience4j.ratelimiter;
 
-import io.vavr.control.Either;
+import io.github.resilience4j.core.functions.Either;
 
 import java.io.Serializable;
 import java.time.Duration;
@@ -31,14 +31,16 @@ public class RateLimiterConfig implements Serializable {
     private static final long serialVersionUID = -1621614587284115957L;
 
     private static final String TIMEOUT_DURATION_MUST_NOT_BE_NULL = "TimeoutDuration must not be null";
+    private static final String TIMEOUT_DURATION_TOO_LARGE = "TimeoutDuration too large";
     private static final String LIMIT_REFRESH_PERIOD_MUST_NOT_BE_NULL = "LimitRefreshPeriod must not be null";
+    private static final String LIMIT_REFRESH_PERIOD_TOO_LARGE = "LimitRefreshPeriod too large";
     private static final Duration ACCEPTABLE_REFRESH_PERIOD = Duration.ofNanos(1L);
     private static final boolean DEFAULT_WRITABLE_STACK_TRACE_ENABLED = true;
 
     private final Duration timeoutDuration;
     private final Duration limitRefreshPeriod;
     private final int limitForPeriod;
-    private final Predicate<Either<? extends Throwable, ?>> drainPermissionsOnResult;
+    private final transient Predicate<Either<? extends Throwable, ?>> drainPermissionsOnResult;
     private final boolean writableStackTraceEnabled;
 
     private RateLimiterConfig(Duration timeoutDuration,
@@ -82,11 +84,24 @@ public class RateLimiterConfig implements Serializable {
     }
 
     private static Duration checkTimeoutDuration(final Duration timeoutDuration) {
-        return requireNonNull(timeoutDuration, TIMEOUT_DURATION_MUST_NOT_BE_NULL);
+        requireNonNull(timeoutDuration, TIMEOUT_DURATION_MUST_NOT_BE_NULL);
+        if (timeoutDuration.isNegative()) {
+            throw new IllegalArgumentException("TimeoutDuration must not be negative");
+        }
+        return validateDurationWithinRange(timeoutDuration, TIMEOUT_DURATION_TOO_LARGE);
+    }
+
+    private static Duration validateDurationWithinRange(Duration duration, String message) {
+        try {
+            return Duration.ofNanos(duration.toNanos()); // make sure there is no long overflow
+        } catch (Exception e) {
+            throw new RuntimeException(message, e);
+        }
     }
 
     private static Duration checkLimitRefreshPeriod(Duration limitRefreshPeriod) {
-        requireNonNull(limitRefreshPeriod, LIMIT_REFRESH_PERIOD_MUST_NOT_BE_NULL);
+        validateDurationWithinRange(
+            requireNonNull(limitRefreshPeriod, LIMIT_REFRESH_PERIOD_MUST_NOT_BE_NULL), LIMIT_REFRESH_PERIOD_TOO_LARGE);
         boolean refreshPeriodIsTooShort =
             limitRefreshPeriod.compareTo(ACCEPTABLE_REFRESH_PERIOD) < 0;
         if (refreshPeriodIsTooShort) {
@@ -129,7 +144,7 @@ public class RateLimiterConfig implements Serializable {
             ", limitRefreshPeriod=" + limitRefreshPeriod +
             ", limitForPeriod=" + limitForPeriod +
             ", writableStackTraceEnabled=" + writableStackTraceEnabled +
-            '}';
+            "}";
     }
 
     public static class Builder {

@@ -19,17 +19,19 @@
 package io.github.resilience4j.circuitbreaker;
 
 import io.github.resilience4j.core.IntervalFunction;
+import io.github.resilience4j.core.functions.Either;
 import io.github.resilience4j.core.lang.Nullable;
 import io.github.resilience4j.core.predicate.PredicateCreator;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker.State;
 
 import java.io.Serializable;
 import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Arrays;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 import java.util.function.Predicate;
-
 
 /**
  * A {@link CircuitBreakerConfig} configures a {@link CircuitBreaker}
@@ -46,18 +48,25 @@ public class CircuitBreakerConfig implements Serializable {
     public static final int DEFAULT_SLIDING_WINDOW_SIZE = 100;
     public static final int DEFAULT_SLOW_CALL_DURATION_THRESHOLD = 60; // Seconds
     public static final int DEFAULT_WAIT_DURATION_IN_HALF_OPEN_STATE = 0; // Seconds. It is an optional parameter
+    public static final State DEFAULT_TRANSITION_TO_STATE_AFTER_WAIT_DURATION = State.OPEN; // OPEN|CLOSED. It is an optional parameter
     public static final SlidingWindowType DEFAULT_SLIDING_WINDOW_TYPE = SlidingWindowType.COUNT_BASED;
+    public static final SlidingWindowSynchronizationStrategy DEFAULT_SLIDING_WINDOW_SYNCHRONIZATION_STRATEGY =
+            SlidingWindowSynchronizationStrategy.SYNCHRONIZED;
     public static final boolean DEFAULT_WRITABLE_STACK_TRACE_ENABLED = true;
     private static final Predicate<Throwable> DEFAULT_RECORD_EXCEPTION_PREDICATE = throwable -> true;
     private static final Predicate<Throwable> DEFAULT_IGNORE_EXCEPTION_PREDICATE = throwable -> false;
     private static final Function<Clock, Long> DEFAULT_TIMESTAMP_FUNCTION = clock -> System.nanoTime();
     private static final TimeUnit DEFAULT_TIMESTAMP_UNIT = TimeUnit.NANOSECONDS;
     private static final Predicate<Object> DEFAULT_RECORD_RESULT_PREDICATE = (Object object) -> false;
+    private static final Function<Either<Object, Throwable>, TransitionCheckResult> DEFAULT_TRANSITION_ON_RESULT
+        = any -> TransitionCheckResult.noTransition();
+    private static final Clock DEFAULT_CLOCK = Clock.systemUTC();
     // The default exception predicate counts all exceptions as failures.
-    private Predicate<Throwable> recordExceptionPredicate = DEFAULT_RECORD_EXCEPTION_PREDICATE;
+
+    private transient Predicate<Throwable> recordExceptionPredicate = DEFAULT_RECORD_EXCEPTION_PREDICATE;
     // The default exception predicate ignores no exceptions.
-    private Predicate<Throwable> ignoreExceptionPredicate = DEFAULT_IGNORE_EXCEPTION_PREDICATE;
-    private Function<Clock, Long> currentTimestampFunction = DEFAULT_TIMESTAMP_FUNCTION;
+    private transient Predicate<Throwable> ignoreExceptionPredicate = DEFAULT_IGNORE_EXCEPTION_PREDICATE;
+    private transient Function<Clock, Long> currentTimestampFunction = DEFAULT_TIMESTAMP_FUNCTION;
     private TimeUnit timestampUnit = DEFAULT_TIMESTAMP_UNIT;
 
     private transient Predicate<Object> recordResultPredicate = DEFAULT_RECORD_RESULT_PREDICATE;
@@ -71,16 +80,24 @@ public class CircuitBreakerConfig implements Serializable {
     private int permittedNumberOfCallsInHalfOpenState = DEFAULT_PERMITTED_CALLS_IN_HALF_OPEN_STATE;
     private int slidingWindowSize = DEFAULT_SLIDING_WINDOW_SIZE;
     private SlidingWindowType slidingWindowType = DEFAULT_SLIDING_WINDOW_TYPE;
+    private SlidingWindowSynchronizationStrategy slidingWindowSynchronizationStrategy =
+            DEFAULT_SLIDING_WINDOW_SYNCHRONIZATION_STRATEGY;
     private int minimumNumberOfCalls = DEFAULT_MINIMUM_NUMBER_OF_CALLS;
     private boolean writableStackTraceEnabled = DEFAULT_WRITABLE_STACK_TRACE_ENABLED;
     private boolean automaticTransitionFromOpenToHalfOpenEnabled = false;
-    private IntervalFunction waitIntervalFunctionInOpenState = IntervalFunction
+    private State initialState = State.CLOSED;
+    private transient IntervalFunction waitIntervalFunctionInOpenState = IntervalFunction
         .of(Duration.ofSeconds(DEFAULT_WAIT_DURATION_IN_OPEN_STATE));
+    private transient Function<Either<Object, Throwable>, TransitionCheckResult> transitionOnResult
+        = DEFAULT_TRANSITION_ON_RESULT;
     private float slowCallRateThreshold = DEFAULT_SLOW_CALL_RATE_THRESHOLD;
     private Duration slowCallDurationThreshold = Duration
         .ofSeconds(DEFAULT_SLOW_CALL_DURATION_THRESHOLD);
     private Duration maxWaitDurationInHalfOpenState = Duration
         .ofSeconds(DEFAULT_WAIT_DURATION_IN_HALF_OPEN_STATE);
+    private State transitionToStateAfterWaitDuration = DEFAULT_TRANSITION_TO_STATE_AFTER_WAIT_DURATION;
+    private transient Clock clock = DEFAULT_CLOCK;
+    private boolean ignoreExceptionsPrecedenceEnabled = false;
 
     private CircuitBreakerConfig() {
     }
@@ -118,14 +135,6 @@ public class CircuitBreakerConfig implements Serializable {
     }
 
     /**
-     * @deprecated since 1.2.0 You should use {@link #getWaitIntervalFunctionInOpenState()} instead.
-     */
-    @Deprecated
-    public Duration getWaitDurationInOpenState() {
-        return Duration.ofMillis(waitIntervalFunctionInOpenState.apply(1));
-    }
-
-    /**
      * Returns an interval function which controls how long the CircuitBreaker should stay open,
      * before it switches to half open.
      *
@@ -133,6 +142,10 @@ public class CircuitBreakerConfig implements Serializable {
      */
     public IntervalFunction getWaitIntervalFunctionInOpenState() {
         return waitIntervalFunctionInOpenState;
+    }
+
+    public Function<Either<Object, Throwable>, TransitionCheckResult> getTransitionOnResult() {
+        return transitionOnResult;
     }
 
     public int getSlidingWindowSize() {
@@ -159,6 +172,11 @@ public class CircuitBreakerConfig implements Serializable {
         return automaticTransitionFromOpenToHalfOpenEnabled;
     }
 
+    public State getInitialState(){
+        return initialState;
+    }
+
+
     public int getMinimumNumberOfCalls() {
         return minimumNumberOfCalls;
     }
@@ -175,6 +193,10 @@ public class CircuitBreakerConfig implements Serializable {
         return slidingWindowType;
     }
 
+    public SlidingWindowSynchronizationStrategy getSlidingWindowSynchronizationStrategy() {
+        return slidingWindowSynchronizationStrategy;
+    }
+
     public float getSlowCallRateThreshold() {
         return slowCallRateThreshold;
     }
@@ -187,46 +209,122 @@ public class CircuitBreakerConfig implements Serializable {
         return maxWaitDurationInHalfOpenState;
     }
 
+    public State getTransitionToStateAfterWaitDuration() {
+        return transitionToStateAfterWaitDuration;
+    }
+
+    public Clock getClock() {
+        return clock;
+    }
+
+    public boolean isIgnoreExceptionsPrecedenceEnabled() {
+        return ignoreExceptionsPrecedenceEnabled;
+    }
+
     public enum SlidingWindowType {
         TIME_BASED, COUNT_BASED
     }
 
-    @Override
-    public String toString() {
-        StringBuilder circuitBreakerConfig = new StringBuilder("CircuitBreakerConfig {");
-        circuitBreakerConfig.append("recordExceptionPredicate=");
-        circuitBreakerConfig.append(recordExceptionPredicate);
-        circuitBreakerConfig.append(", ignoreExceptionPredicate=");
-        circuitBreakerConfig.append(ignoreExceptionPredicate);
-        circuitBreakerConfig.append(", recordExceptions=");
-        circuitBreakerConfig.append(Arrays.toString(recordExceptions));
-        circuitBreakerConfig.append(", ignoreExceptions=");
-        circuitBreakerConfig.append(Arrays.toString(ignoreExceptions));
-        circuitBreakerConfig.append(", failureRateThreshold=");
-        circuitBreakerConfig.append(failureRateThreshold);
-        circuitBreakerConfig.append(", permittedNumberOfCallsInHalfOpenState=");
-        circuitBreakerConfig.append(permittedNumberOfCallsInHalfOpenState);
-        circuitBreakerConfig.append(", slidingWindowSize=");
-        circuitBreakerConfig.append(slidingWindowSize);
-        circuitBreakerConfig.append(", slidingWindowType=");
-        circuitBreakerConfig.append(slidingWindowType);
-        circuitBreakerConfig.append(", minimumNumberOfCalls=");
-        circuitBreakerConfig.append(minimumNumberOfCalls);
-        circuitBreakerConfig.append(", writableStackTraceEnabled=");
-        circuitBreakerConfig.append(writableStackTraceEnabled);
-        circuitBreakerConfig.append(", automaticTransitionFromOpenToHalfOpenEnabled=");
-        circuitBreakerConfig.append(automaticTransitionFromOpenToHalfOpenEnabled);
-        circuitBreakerConfig.append(", waitIntervalFunctionInOpenState=");
-        circuitBreakerConfig.append(waitIntervalFunctionInOpenState);
-        circuitBreakerConfig.append(", slowCallRateThreshold=");
-        circuitBreakerConfig.append(slowCallRateThreshold);
-        circuitBreakerConfig.append(", slowCallDurationThreshold=");
-        circuitBreakerConfig.append(slowCallDurationThreshold);
-        circuitBreakerConfig.append("}");
-        return circuitBreakerConfig.toString();
+    public enum SlidingWindowSynchronizationStrategy {
+        /**
+         * Lock-free algorithm based on CAS of immutable objects.
+         *
+         * This option is preferable in cases of high concurrency, as contention is handled better since threads
+         * cannot block each other. It has the disadvantage of allocating more objects as they cannot be mutated
+         * in place.
+         */
+        LOCK_FREE,
+
+        /**
+         * Blocking algorithm using locks.
+         *
+         * This option does not allocate extra memory, but threads can block each other. One thread that acquired
+         * the lock and is superseded from the CPU will block all other threads until is scheduled again by the
+         * OS scheduler.
+         */
+        SYNCHRONIZED
     }
 
-	public static class Builder {
+    @Override
+    public String toString() {
+        return "CircuitBreakerConfig{" +
+            "recordExceptionPredicate=" + recordExceptionPredicate +
+            ", ignoreExceptionPredicate=" + ignoreExceptionPredicate +
+            ", recordExceptions=" + Arrays.toString(recordExceptions) +
+            ", ignoreExceptions=" + Arrays.toString(ignoreExceptions) +
+            ", failureRateThreshold=" + failureRateThreshold +
+            ", permittedNumberOfCallsInHalfOpenState=" + permittedNumberOfCallsInHalfOpenState +
+            ", slidingWindowSize=" + slidingWindowSize +
+            ", slidingWindowType=" + slidingWindowType +
+            ", slidingWindowSynchronizationStrategy=" + slidingWindowSynchronizationStrategy +
+            ", minimumNumberOfCalls=" + minimumNumberOfCalls +
+            ", writableStackTraceEnabled=" + writableStackTraceEnabled +
+            ", automaticTransitionFromOpenToHalfOpenEnabled=" + automaticTransitionFromOpenToHalfOpenEnabled +
+            ", initialState=" + initialState +
+            ", waitIntervalFunctionInOpenState=" + waitIntervalFunctionInOpenState +
+            ", slowCallRateThreshold=" + slowCallRateThreshold +
+            ", slowCallDurationThreshold=" + slowCallDurationThreshold +
+            ", ignoreExceptionsPrecedenceEnabled=" + ignoreExceptionsPrecedenceEnabled +
+            "}";
+    }
+
+    /**
+     * Result of the {@link #getTransitionOnResult()} function with which one can tell the circuit
+     * breaker to transition to a different state if the result of a call meet the desired criteria.
+     */
+    public static class TransitionCheckResult {
+
+        private final boolean transitionToOpen;
+
+        @Nullable
+        private final Duration waitDuration;
+
+        @Nullable
+        private final Instant waitUntil;
+
+        private TransitionCheckResult(boolean transitionToOpen, @Nullable Duration waitDuration,
+                                      @Nullable Instant waitUntil) {
+            this.transitionToOpen = transitionToOpen;
+            this.waitDuration = waitDuration;
+            this.waitUntil = waitUntil;
+        }
+
+        /** Return this result if you do not want any transition to happen. */
+        public static TransitionCheckResult noTransition() {
+            return new TransitionCheckResult(false, null, null);
+        }
+
+        /** This will make the circuit breaker call {@link CircuitBreaker#transitionToOpenState()}  */
+        public static TransitionCheckResult transitionToOpen() {
+            return new TransitionCheckResult(true, null, null);
+        }
+
+        /** This will make the circuit breaker call {@link CircuitBreaker#transitionToOpenStateFor(Duration)}  */
+        public static TransitionCheckResult transitionToOpenAndWaitFor(Duration waitDuration) {
+            return new TransitionCheckResult(true, waitDuration, null);
+        }
+
+        /** This will make the circuit breaker call {@link CircuitBreaker#transitionToOpenStateUntil(Instant)}  */
+        public static TransitionCheckResult transitionToOpenAndWaitUntil(Instant waitUntil) {
+            return new TransitionCheckResult(true, null, waitUntil);
+        }
+
+        public boolean isTransitionToOpen() {
+            return transitionToOpen;
+        }
+
+        @Nullable
+        public Duration getWaitDuration() {
+            return waitDuration;
+        }
+
+        @Nullable
+        public Instant getWaitUntil() {
+            return waitUntil;
+        }
+    }
+
+    public static class Builder {
 
         @Nullable
         private Predicate<Throwable> recordExceptionPredicate;
@@ -248,23 +346,34 @@ public class CircuitBreakerConfig implements Serializable {
         private Predicate<Object> recordResultPredicate = DEFAULT_RECORD_RESULT_PREDICATE;
 
         private IntervalFunction waitIntervalFunctionInOpenState = IntervalFunction
-            .of(Duration.ofSeconds(DEFAULT_SLOW_CALL_DURATION_THRESHOLD));
+            .of(Duration.ofSeconds(DEFAULT_WAIT_DURATION_IN_OPEN_STATE));
+
+        private Function<Either<Object, Throwable>, TransitionCheckResult> transitionOnResult
+            = DEFAULT_TRANSITION_ON_RESULT;
 
         private boolean automaticTransitionFromOpenToHalfOpenEnabled = false;
+        private State initialState = State.CLOSED;
         private SlidingWindowType slidingWindowType = DEFAULT_SLIDING_WINDOW_TYPE;
+        private SlidingWindowSynchronizationStrategy slidingWindowSynchronizationStrategy =
+                DEFAULT_SLIDING_WINDOW_SYNCHRONIZATION_STRATEGY;
         private float slowCallRateThreshold = DEFAULT_SLOW_CALL_RATE_THRESHOLD;
         private Duration slowCallDurationThreshold = Duration
             .ofSeconds(DEFAULT_SLOW_CALL_DURATION_THRESHOLD);
         private Duration maxWaitDurationInHalfOpenState = Duration
             .ofSeconds(DEFAULT_WAIT_DURATION_IN_HALF_OPEN_STATE);
+        private State transitionToStateAfterWaitDuration = DEFAULT_TRANSITION_TO_STATE_AFTER_WAIT_DURATION;
         private byte createWaitIntervalFunctionCounter = 0;
+        private Clock clock = DEFAULT_CLOCK;
+        private boolean ignoreExceptionsPrecedenceEnabled = false;
 
 
         public Builder(CircuitBreakerConfig baseConfig) {
             this.waitIntervalFunctionInOpenState = baseConfig.waitIntervalFunctionInOpenState;
+            this.transitionOnResult = baseConfig.transitionOnResult;
             this.permittedNumberOfCallsInHalfOpenState = baseConfig.permittedNumberOfCallsInHalfOpenState;
             this.slidingWindowSize = baseConfig.slidingWindowSize;
             this.slidingWindowType = baseConfig.slidingWindowType;
+            this.slidingWindowSynchronizationStrategy = baseConfig.slidingWindowSynchronizationStrategy;
             this.minimumNumberOfCalls = baseConfig.minimumNumberOfCalls;
             this.failureRateThreshold = baseConfig.failureRateThreshold;
             this.ignoreExceptions = baseConfig.ignoreExceptions;
@@ -274,11 +383,15 @@ public class CircuitBreakerConfig implements Serializable {
             this.currentTimestampFunction = baseConfig.currentTimestampFunction;
             this.timestampUnit = baseConfig.timestampUnit;
             this.automaticTransitionFromOpenToHalfOpenEnabled = baseConfig.automaticTransitionFromOpenToHalfOpenEnabled;
+            this.initialState = baseConfig.initialState;
             this.slowCallRateThreshold = baseConfig.slowCallRateThreshold;
             this.slowCallDurationThreshold = baseConfig.slowCallDurationThreshold;
             this.maxWaitDurationInHalfOpenState = baseConfig.maxWaitDurationInHalfOpenState;
+            this.transitionToStateAfterWaitDuration = baseConfig.transitionToStateAfterWaitDuration;
             this.writableStackTraceEnabled = baseConfig.writableStackTraceEnabled;
             this.recordResultPredicate = baseConfig.recordResultPredicate;
+            this.clock = baseConfig.clock;
+            this.ignoreExceptionsPrecedenceEnabled = baseConfig.ignoreExceptionsPrecedenceEnabled;
         }
 
         public Builder() {
@@ -301,7 +414,7 @@ public class CircuitBreakerConfig implements Serializable {
         public Builder failureRateThreshold(float failureRateThreshold) {
             if (failureRateThreshold <= 0 || failureRateThreshold > 100) {
                 throw new IllegalArgumentException(
-                    "failureRateThreshold must be between 1 and 100");
+                    "failureRateThreshold must be greater than 0 and lower than 100, but was " + failureRateThreshold);
             }
             this.failureRateThreshold = failureRateThreshold;
             return this;
@@ -326,7 +439,7 @@ public class CircuitBreakerConfig implements Serializable {
         public Builder slowCallRateThreshold(float slowCallRateThreshold) {
             if (slowCallRateThreshold <= 0 || slowCallRateThreshold > 100) {
                 throw new IllegalArgumentException(
-                    "slowCallRateThreshold must be between 1 and 100");
+                    "slowCallRateThreshold must be greater than 0 and not greater than 100, but was " + slowCallRateThreshold);
             }
             this.slowCallRateThreshold = slowCallRateThreshold;
             return this;
@@ -394,6 +507,20 @@ public class CircuitBreakerConfig implements Serializable {
         }
 
         /**
+         * Configures a function which can decide if the circuit breaker should transition to a different
+         * state base on the result of the protected function.
+         *
+         * @param transitionOnResult function which instructs the circuit breaker if it should transition
+         *                           to a different state
+         * @return the CircuitBreakerConfig.Builder
+         */
+        public Builder transitionOnResult(
+            Function<Either<Object, Throwable>, TransitionCheckResult> transitionOnResult) {
+            this.transitionOnResult = transitionOnResult;
+            return this;
+        }
+
+        /**
          * Configures the duration threshold above which calls are considered as slow and increase
          * the slow calls percentage. Default value is 60 seconds.
          *
@@ -414,21 +541,43 @@ public class CircuitBreakerConfig implements Serializable {
          * Configures CircuitBreaker with a fixed wait duration which controls how long the
          * CircuitBreaker should stay in Half Open state, before it switches to open. This is an
          * optional parameter.
-         *
-         * By default CircuitBreaker will stay in Half Open state until
-         * {@code minimumNumberOfCalls} is completed with either success or failure.
+         * <p>
+         * By default, CircuitBreaker will stay in Half Open state until enough calls have
+         * completed, with either success or failure, to evaluate the failure and slow call
+         * rates: {@code permittedNumberOfCallsInHalfOpenState}, or {@code minimumNumberOfCalls}
+         * if that is lower.
          *
          * @param maxWaitDurationInHalfOpenState the wait duration which specifies how long the
          *                                CircuitBreaker should stay in Half Open
          * @return the CircuitBreakerConfig.Builder
-         * @throws IllegalArgumentException if {@code maxWaitDurationInHalfOpenState.toMillis() < 1}
+         * @throws IllegalArgumentException if {@code maxWaitDurationInHalfOpenState.toMillis() < 0}
          */
         public Builder maxWaitDurationInHalfOpenState(Duration maxWaitDurationInHalfOpenState) {
-            if (maxWaitDurationInHalfOpenState.toMillis() < 1) {
+            if (maxWaitDurationInHalfOpenState.toMillis() < 0) {
                 throw new IllegalArgumentException(
-                    "maxWaitDurationInHalfOpenState must be at least 1[ms]");
+                    "maxWaitDurationInHalfOpenState must be greater than or equal to 0[ms]");
             }
             this.maxWaitDurationInHalfOpenState = maxWaitDurationInHalfOpenState;
+            return this;
+        }
+
+        /**
+         * Configures CircuitBreaker transition after max wait duration in half open state. Possible values are
+         * OPEN or CLOSE, by default the value is OPEN.
+         *
+         * @param transitionToStateAfterWaitDuration transition to state after wait duration in half open state
+         * @return the CircuitBreakerConfig.Builder
+         * @throws IllegalArgumentException if {@code transitionToStateAfterWaitDuration == null ||
+         * transitionToStateAfterWaitDuration != State.OPEN && transitionToStateAfterWaitDuration != State.CLOSED}
+         */
+        public Builder transitionToStateAfterWaitDuration(State transitionToStateAfterWaitDuration) {
+            if (transitionToStateAfterWaitDuration == null) {
+                throw new IllegalArgumentException("transitionToStateAfterWaitDuration must not be null");
+            }
+            if (transitionToStateAfterWaitDuration != State.OPEN && transitionToStateAfterWaitDuration != State.CLOSED) {
+                throw new IllegalArgumentException("transitionToStateAfterWaitDuration must be either OPEN or CLOSED");
+            }
+            this.transitionToStateAfterWaitDuration = transitionToStateAfterWaitDuration;
             return this;
         }
 
@@ -450,32 +599,6 @@ public class CircuitBreakerConfig implements Serializable {
             }
             this.permittedNumberOfCallsInHalfOpenState = permittedNumberOfCallsInHalfOpenState;
             return this;
-        }
-
-        /**
-         * @deprecated Use {@link #permittedNumberOfCallsInHalfOpenState(int)} instead.
-         */
-        @Deprecated
-        public Builder ringBufferSizeInHalfOpenState(int ringBufferSizeInHalfOpenState) {
-            if (ringBufferSizeInHalfOpenState < 1) {
-                throw new IllegalArgumentException(
-                    "ringBufferSizeInHalfOpenState must be greater than 0");
-            }
-            this.permittedNumberOfCallsInHalfOpenState = ringBufferSizeInHalfOpenState;
-            return this;
-        }
-
-        /**
-         * @deprecated Use {@link #slidingWindow(int, int, SlidingWindowType)} instead.
-         */
-        @Deprecated
-        public Builder ringBufferSizeInClosedState(int ringBufferSizeInClosedState) {
-            if (ringBufferSizeInClosedState < 1) {
-                throw new IllegalArgumentException(
-                    "ringBufferSizeInClosedState must be greater than 0");
-            }
-            return slidingWindow(ringBufferSizeInClosedState, ringBufferSizeInClosedState,
-                SlidingWindowType.COUNT_BASED);
         }
 
         /**
@@ -503,6 +626,9 @@ public class CircuitBreakerConfig implements Serializable {
          * <p>
          * Default slidingWindowSize is 100, minimumNumberOfCalls is 100 and slidingWindowType is
          * COUNT_BASED.
+         * <p>
+         * The sliding window has two types of synchronization strategies,
+         * for more details check {@link SlidingWindowSynchronizationStrategy}. Default is SYNCHRONIZED.
          *
          * @param slidingWindowSize    the size of the sliding window when the CircuitBreaker is
          *                             closed.
@@ -510,12 +636,20 @@ public class CircuitBreakerConfig implements Serializable {
          *                             failure rate can be calculated.
          * @param slidingWindowType    the type of the sliding window. Either COUNT_BASED or
          *                             TIME_BASED.
+         * @param slidingWindowSynchronizationStrategy  the type of synchronization for the sliding window.
          * @return the CircuitBreakerConfig.Builder
          * @throws IllegalArgumentException if {@code slidingWindowSize < 1 || minimumNumberOfCalls
          *                                  < 1}
+         *                                  or if {@code slidingWindowType == TIME_BASED
+         *                                  && slidingWindowSynchronizationStrategy == LOCK_FREE
+         *                                  && slidingWindowSize < 2}
          */
-        public Builder slidingWindow(int slidingWindowSize, int minimumNumberOfCalls,
-            SlidingWindowType slidingWindowType) {
+        public Builder slidingWindow(
+                int slidingWindowSize,
+                int minimumNumberOfCalls,
+                SlidingWindowType slidingWindowType,
+                SlidingWindowSynchronizationStrategy slidingWindowSynchronizationStrategy
+        ) {
             if (slidingWindowSize < 1) {
                 throw new IllegalArgumentException("slidingWindowSize must be greater than 0");
             }
@@ -527,9 +661,63 @@ public class CircuitBreakerConfig implements Serializable {
             } else {
                 this.minimumNumberOfCalls = minimumNumberOfCalls;
             }
+
+            if(slidingWindowType == SlidingWindowType.TIME_BASED && slidingWindowSynchronizationStrategy == SlidingWindowSynchronizationStrategy.LOCK_FREE && slidingWindowSize < 2) {
+                throw new IllegalArgumentException("For TIME_BASED with LOCK_FREE strategy, slidingWindowSize must be at least 2");
+            }
+
             this.slidingWindowSize = slidingWindowSize;
             this.slidingWindowType = slidingWindowType;
+            this.slidingWindowSynchronizationStrategy = slidingWindowSynchronizationStrategy;
             return this;
+        }
+
+        /**
+         * Configures the sliding window which is used to record the outcome of calls when the
+         * CircuitBreaker is closed. {@code slidingWindowSize} configures the size of the sliding
+         * window. Sliding window can either be count-based or time-based, specified by {@code
+         * slidingWindowType}. {@code minimumNumberOfCalls} configures the minimum number of calls
+         * which are required (per sliding window period) before the CircuitBreaker can calculate
+         * the error rate. For example, if {@code minimumNumberOfCalls} is 10, then at least 10
+         * calls must be recorded, before the failure rate can be calculated. If only 9 calls have
+         * been recorded, the CircuitBreaker will not transition to open, even if all 9 calls have
+         * failed.
+         * <p>
+         * If {@code slidingWindowSize} is 100 and {@code slidingWindowType} is COUNT_BASED, the
+         * last 100 calls are recorded and aggregated. If {@code slidingWindowSize} is 10 and {@code
+         * slidingWindowType} is TIME_BASED, the calls of the last 10 seconds are recorded and
+         * aggregated.
+         * <p>
+         * The {@code slidingWindowSize} must be greater than 0. The {@code minimumNumberOfCalls}
+         * must be greater than 0. If the {@code slidingWindowType} is COUNT_BASED, the {@code
+         * minimumNumberOfCalls} may not be greater than {@code slidingWindowSize}. If a greater
+         * value is provided, {@code minimumNumberOfCalls} will be equal to {@code
+         * slidingWindowSize}. If the {@code slidingWindowType} is TIME_BASED, the {@code
+         * minimumNumberOfCalls} may be any amount.
+         * <p>
+         * Default slidingWindowSize is 100, minimumNumberOfCalls is 100 and slidingWindowType is
+         * COUNT_BASED.
+         * <p>
+         * Uses {@link SlidingWindowSynchronizationStrategy#SYNCHRONIZED} strategy by default.
+         *
+         * @see #slidingWindow(int, int, SlidingWindowType, SlidingWindowSynchronizationStrategy)
+         *
+         * @param slidingWindowSize    the size of the sliding window when the CircuitBreaker is
+         *                             closed.
+         * @param minimumNumberOfCalls the minimum number of calls that must be recorded before the
+         *                             failure rate can be calculated.
+         * @param slidingWindowType    the type of the sliding window. Either COUNT_BASED or
+         *                             TIME_BASED.
+         * @return the CircuitBreakerConfig.Builder
+         * @throws IllegalArgumentException if {@code slidingWindowSize < 1 || minimumNumberOfCalls
+         *                                  < 1}
+         */
+        public Builder slidingWindow(
+                int slidingWindowSize,
+                int minimumNumberOfCalls,
+                SlidingWindowType slidingWindowType
+        ) {
+            return slidingWindow(slidingWindowSize, minimumNumberOfCalls, slidingWindowType, DEFAULT_SLIDING_WINDOW_SYNCHRONIZATION_STRATEGY);
         }
 
         /**
@@ -545,7 +733,7 @@ public class CircuitBreakerConfig implements Serializable {
          *                          closed.
          * @return the CircuitBreakerConfig.Builder
          * @throws IllegalArgumentException if {@code slidingWindowSize < 1}
-         * @see #slidingWindow(int, int, SlidingWindowType)
+         * @see #slidingWindow(int, int, SlidingWindowType, SlidingWindowSynchronizationStrategy)
          */
         public Builder slidingWindowSize(int slidingWindowSize) {
             if (slidingWindowSize < 1) {
@@ -568,7 +756,7 @@ public class CircuitBreakerConfig implements Serializable {
          *                             failure rate can be calculated.
          * @return the CircuitBreakerConfig.Builder
          * @throws IllegalArgumentException if {@code minimumNumberOfCalls < 1}
-         * @see #slidingWindow(int, int, SlidingWindowType)
+         * @see #slidingWindow(int, int, SlidingWindowType, SlidingWindowSynchronizationStrategy)
          */
         public Builder minimumNumberOfCalls(int minimumNumberOfCalls) {
             if (minimumNumberOfCalls < 1) {
@@ -588,7 +776,7 @@ public class CircuitBreakerConfig implements Serializable {
          * @param slidingWindowType the type of the sliding window. Either COUNT_BASED or
          *                          TIME_BASED.
          * @return the CircuitBreakerConfig.Builder
-         * @see #slidingWindow(int, int, SlidingWindowType)
+         * @see #slidingWindow(int, int, SlidingWindowType, SlidingWindowSynchronizationStrategy)
          */
         public Builder slidingWindowType(SlidingWindowType slidingWindowType) {
             this.slidingWindowType = slidingWindowType;
@@ -596,11 +784,19 @@ public class CircuitBreakerConfig implements Serializable {
         }
 
         /**
-         * @deprecated use {@link #recordException(Predicate)} instead.
+         * Configures the synchronization strategy for the sliding window.
+         * For more details check {@link SlidingWindowSynchronizationStrategy}.
+         * <p>
+         * Default slidingWindowSynchonizationStrategy is SYNCHRONIZED.
+         *
+         * @param slidingWindowSynchronizationStrategy the synchronization strategy
+         * @return the CircuitBreakerConfig.Builder
+         * @see #slidingWindow(int, int, SlidingWindowType, SlidingWindowSynchronizationStrategy)
          */
-        @Deprecated
-        public Builder recordFailure(Predicate<Throwable> predicate) {
-            this.recordExceptionPredicate = predicate;
+        public Builder slidingWindowSynchronizationStrategy(
+                SlidingWindowSynchronizationStrategy slidingWindowSynchronizationStrategy
+        ) {
+            this.slidingWindowSynchronizationStrategy = slidingWindowSynchronizationStrategy;
             return this;
         }
 
@@ -667,17 +863,18 @@ public class CircuitBreakerConfig implements Serializable {
          * failure rate. Any exception matching or inheriting from one of the list should count as a
          * failure, unless ignored via {@link #ignoreExceptions(Class[])} or {@link
          * #ignoreException(Predicate)}.
-         *
-         * @param errorClasses the error classes that are recorded
-         * @return the CircuitBreakerConfig.Builder
-         * @see #ignoreExceptions(Class[]) ). Ignoring an exception has priority over recording an
-         * exception.
+         * <p>
+         * Ignoring an exception has priority over recording an exception.
          * <p>
          * Example: recordExceptions(Throwable.class) and ignoreExceptions(RuntimeException.class)
          * would capture all Errors and checked Exceptions, and ignore RuntimeExceptions.
          * <p>
          * For a more sophisticated exception management use the
-         * @see #recordException(Predicate) method
+         * {@link #recordException(Predicate)} method
+         *
+         * @param errorClasses the error classes that are recorded
+         * @return the CircuitBreakerConfig.Builder
+         * @see #ignoreExceptions(Class[])
          */
         @SuppressWarnings("unchecked")
         @SafeVarargs
@@ -726,6 +923,7 @@ public class CircuitBreakerConfig implements Serializable {
             return this;
         }
 
+
         /**
          * Enables automatic transition from OPEN to HALF_OPEN state once the
          * waitDurationInOpenState has passed.
@@ -740,6 +938,55 @@ public class CircuitBreakerConfig implements Serializable {
             return this;
         }
 
+
+        public Builder initialState(State state){
+            this.initialState = state;
+            return this;
+        }
+
+        /**
+         * Configures a custom Clock instance to use for time measurements.
+         * Default value is Clock.systemUTC().
+         *
+         * @param clock the Clock to use
+         * @return the CircuitBreakerConfig.Builder
+         */
+        public Builder clock(Clock clock) {
+            if (clock == null) {
+                this.clock = DEFAULT_CLOCK;
+            } else {
+                this.clock = clock;
+            }
+            return this;
+        }
+
+        /**
+         * Enables ignoreExceptions to take precedence over recordExceptions.
+         * When enabled, if an exception matches both recordExceptions and ignoreExceptions,
+         * it will be ignored. When disabled (default), the legacy behavior is used where
+         * recordExceptions takes precedence for backward compatibility.
+         *
+         * @param enableIgnoreExceptionsPrecedence true to enable new behavior, false for legacy behavior (default)
+         * @return the CircuitBreakerConfig.Builder
+         */
+        public Builder ignoreExceptionsPrecedenceEnabled(boolean enableIgnoreExceptionsPrecedence) {
+            this.ignoreExceptionsPrecedenceEnabled = enableIgnoreExceptionsPrecedence;
+            return this;
+        }
+
+        /**
+         * Enables ignoreExceptions to take precedence over recordExceptions.
+         * This changes the default behavior where recordExceptions takes precedence.
+         * When enabled, exceptions that match both recordExceptions and ignoreExceptions
+         * will be ignored.
+         *
+         * @return the CircuitBreakerConfig.Builder
+         */
+        public Builder enableIgnoreExceptionsPrecedence() {
+            this.ignoreExceptionsPrecedenceEnabled = true;
+            return this;
+        }
+
         /**
          * Builds a CircuitBreakerConfig
          *
@@ -749,9 +996,12 @@ public class CircuitBreakerConfig implements Serializable {
         public CircuitBreakerConfig build() {
             CircuitBreakerConfig config = new CircuitBreakerConfig();
             config.waitIntervalFunctionInOpenState = validateWaitIntervalFunctionInOpenState();
+            config.transitionOnResult = transitionOnResult;
             config.slidingWindowType = slidingWindowType;
+            config.slidingWindowSynchronizationStrategy = slidingWindowSynchronizationStrategy;
             config.slowCallDurationThreshold = slowCallDurationThreshold;
             config.maxWaitDurationInHalfOpenState = maxWaitDurationInHalfOpenState;
+            config.transitionToStateAfterWaitDuration = transitionToStateAfterWaitDuration;
             config.slowCallRateThreshold = slowCallRateThreshold;
             config.failureRateThreshold = failureRateThreshold;
             config.slidingWindowSize = slidingWindowSize;
@@ -760,29 +1010,34 @@ public class CircuitBreakerConfig implements Serializable {
             config.recordExceptions = recordExceptions;
             config.ignoreExceptions = ignoreExceptions;
             config.automaticTransitionFromOpenToHalfOpenEnabled = automaticTransitionFromOpenToHalfOpenEnabled;
+            config.initialState = initialState;
             config.writableStackTraceEnabled = writableStackTraceEnabled;
             config.recordExceptionPredicate = createRecordExceptionPredicate();
             config.ignoreExceptionPredicate = createIgnoreFailurePredicate();
+            config.ignoreExceptionsPrecedenceEnabled = ignoreExceptionsPrecedenceEnabled;
             config.currentTimestampFunction = currentTimestampFunction;
             config.timestampUnit = timestampUnit;
             config.recordResultPredicate = recordResultPredicate;
+            config.clock = clock;
             return config;
         }
 
         private Predicate<Throwable> createIgnoreFailurePredicate() {
-            return PredicateCreator.createExceptionsPredicate(ignoreExceptions)
-                .map(predicate -> ignoreExceptionPredicate != null ? predicate
-                    .or(ignoreExceptionPredicate) : predicate)
-                .orElseGet(() -> ignoreExceptionPredicate != null ? ignoreExceptionPredicate
-                    : DEFAULT_IGNORE_EXCEPTION_PREDICATE);
+            return PredicateCreator.createExceptionsPredicate(ignoreExceptionPredicate, ignoreExceptions)
+                .orElse(DEFAULT_IGNORE_EXCEPTION_PREDICATE);
         }
 
         private Predicate<Throwable> createRecordExceptionPredicate() {
-            return PredicateCreator.createExceptionsPredicate(recordExceptions)
-                .map(predicate -> recordExceptionPredicate != null ? predicate
-                    .or(recordExceptionPredicate) : predicate)
-                .orElseGet(() -> recordExceptionPredicate != null ? recordExceptionPredicate
-                    : DEFAULT_RECORD_EXCEPTION_PREDICATE);
+            Predicate<Throwable> baseRecordExceptionPredicate = PredicateCreator.createExceptionsPredicate(recordExceptionPredicate, recordExceptions)
+                    .orElse(DEFAULT_RECORD_EXCEPTION_PREDICATE);
+
+
+            if (ignoreExceptionsPrecedenceEnabled) {
+                return throwable ->
+                        !createIgnoreFailurePredicate().test(throwable) &&
+                                baseRecordExceptionPredicate.test(throwable);
+            }
+            return baseRecordExceptionPredicate;
         }
 
         private IntervalFunction validateWaitIntervalFunctionInOpenState() {

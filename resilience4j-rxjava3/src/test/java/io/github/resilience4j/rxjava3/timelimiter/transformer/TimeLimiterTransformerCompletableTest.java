@@ -1,5 +1,5 @@
 /*
- *  Copyright 2019 authors
+ *  Copyright 2026 authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,37 +16,49 @@
 
 package io.github.resilience4j.rxjava3.timelimiter.transformer;
 
-import io.github.resilience4j.rxjava3.TestSchedulerRule;
-import io.github.resilience4j.rxjava3.timelimiter.transformer.TimeLimiterTransformer;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.BDDMockito.given;
+import static org.mockito.BDDMockito.then;
+import static org.mockito.Mockito.mock;
+
+import java.time.Duration;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+
+import org.junit.jupiter.api.Test;
+import io.reactivex.rxjava3.plugins.RxJavaPlugins;
+import io.reactivex.rxjava3.schedulers.TestScheduler;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+
 import io.github.resilience4j.test.HelloWorldService;
 import io.github.resilience4j.timelimiter.TimeLimiter;
 import io.github.resilience4j.timelimiter.TimeLimiterConfig;
 import io.reactivex.rxjava3.core.Completable;
 import io.reactivex.rxjava3.core.Maybe;
 import io.reactivex.rxjava3.observers.TestObserver;
-import io.reactivex.rxjava3.schedulers.TestScheduler;
-import org.junit.Rule;
-import org.junit.Test;
 
-import java.time.Duration;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
+class TimeLimiterTransformerCompletableTest {
 
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.BDDMockito.given;
-import static org.mockito.BDDMockito.then;
-import static org.mockito.Mockito.mock;
+    private TestScheduler testScheduler;
 
-public class TimeLimiterTransformerCompletableTest {
+    @BeforeEach
+    void setUpScheduler() {
+        testScheduler = new TestScheduler();
+        RxJavaPlugins.setIoSchedulerHandler(scheduler -> testScheduler);
+        RxJavaPlugins.setComputationSchedulerHandler(scheduler -> testScheduler);
+        RxJavaPlugins.setNewThreadSchedulerHandler(scheduler -> testScheduler);
+    }
 
-    @Rule
-    public final TestSchedulerRule testSchedulerRule = new TestSchedulerRule();
-    private final TestScheduler testScheduler = testSchedulerRule.getTestScheduler();
+    @AfterEach
+    void resetScheduler() {
+        RxJavaPlugins.reset();
+    }
     private final TimeLimiter timeLimiter = mock(TimeLimiter.class);
     private final HelloWorldService helloWorldService = mock(HelloWorldService.class);
 
     @Test
-    public void otherError() {
+    void otherError() {
         given(helloWorldService.returnHelloWorld())
             .willThrow(new RuntimeException());
         given(timeLimiter.getTimeLimiterConfig())
@@ -63,7 +75,7 @@ public class TimeLimiterTransformerCompletableTest {
     }
 
     @Test
-    public void timeout() {
+    void timeout() {
         given(timeLimiter.getTimeLimiterConfig())
             .willReturn(toConfig(Duration.ZERO));
         TestObserver<?> observer = Maybe.timer(1, TimeUnit.MINUTES)
@@ -79,7 +91,7 @@ public class TimeLimiterTransformerCompletableTest {
     }
 
     @Test
-    public void doNotTimeout() {
+    void doNotTimeout() {
         given(helloWorldService.returnHelloWorld())
             .willReturn("hello");
         given(timeLimiter.getTimeLimiterConfig())
@@ -100,5 +112,4 @@ public class TimeLimiterTransformerCompletableTest {
             .timeoutDuration(timeout)
             .build();
     }
-
 }

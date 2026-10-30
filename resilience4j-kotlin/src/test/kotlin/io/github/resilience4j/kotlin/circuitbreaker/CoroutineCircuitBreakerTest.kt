@@ -21,19 +21,20 @@ package io.github.resilience4j.kotlin.circuitbreaker
 import io.github.resilience4j.circuitbreaker.CallNotPermittedException
 import io.github.resilience4j.circuitbreaker.CircuitBreaker
 import io.github.resilience4j.kotlin.CoroutineHelloWorldService
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.assertj.core.api.Assertions
+import org.junit.jupiter.api.Test
 import org.assertj.core.api.Assertions.assertThat
-import org.junit.Test
 
 class CoroutineCircuitBreakerTest {
-
     @Test
     fun `should execute successful function`() {
         runBlocking {
             val circuitBreaker = CircuitBreaker.ofDefaults("testName")
             val metrics = circuitBreaker.metrics
-            assertThat(metrics.numberOfBufferedCalls).isEqualTo(0)
+            assertThat(metrics.numberOfBufferedCalls).isZero()
             val helloWorldService = CoroutineHelloWorldService()
 
             //When
@@ -44,7 +45,7 @@ class CoroutineCircuitBreakerTest {
             //Then
             assertThat(result).isEqualTo("Hello world")
             assertThat(metrics.numberOfBufferedCalls).isEqualTo(1)
-            assertThat(metrics.numberOfFailedCalls).isEqualTo(0)
+            assertThat(metrics.numberOfFailedCalls).isZero()
             assertThat(metrics.numberOfSuccessfulCalls).isEqualTo(1)
             // Then the helloWorldService should be invoked 1 time
             assertThat(helloWorldService.invocationCounter).isEqualTo(1)
@@ -57,7 +58,7 @@ class CoroutineCircuitBreakerTest {
             val circuitBreaker = CircuitBreaker.ofDefaults("testName")
             circuitBreaker.transitionToOpenState()
             val metrics = circuitBreaker.metrics
-            assertThat(metrics.numberOfBufferedCalls).isEqualTo(0)
+            assertThat(metrics.numberOfBufferedCalls).isZero()
             val helloWorldService = CoroutineHelloWorldService()
 
             //When
@@ -71,12 +72,12 @@ class CoroutineCircuitBreakerTest {
             }
 
             //Then
-            assertThat(metrics.numberOfBufferedCalls).isEqualTo(0)
-            assertThat(metrics.numberOfFailedCalls).isEqualTo(0)
-            assertThat(metrics.numberOfSuccessfulCalls).isEqualTo(0)
+            assertThat(metrics.numberOfBufferedCalls).isZero()
+            assertThat(metrics.numberOfFailedCalls).isZero()
+            assertThat(metrics.numberOfSuccessfulCalls).isZero()
             assertThat(metrics.numberOfNotPermittedCalls).isEqualTo(1)
             // Then the helloWorldService should not be invoked
-            assertThat(helloWorldService.invocationCounter).isEqualTo(0)
+            assertThat(helloWorldService.invocationCounter).isZero()
         }
     }
 
@@ -86,7 +87,7 @@ class CoroutineCircuitBreakerTest {
             // Given
             val circuitBreaker = CircuitBreaker.ofDefaults("testName")
             val metrics = circuitBreaker.metrics
-            assertThat(metrics.numberOfBufferedCalls).isEqualTo(0)
+            assertThat(metrics.numberOfBufferedCalls).isZero()
             val helloWorldService = CoroutineHelloWorldService()
 
             //When
@@ -97,7 +98,7 @@ class CoroutineCircuitBreakerTest {
             //Then
             assertThat(function()).isEqualTo("Hello world")
             assertThat(metrics.numberOfBufferedCalls).isEqualTo(1)
-            assertThat(metrics.numberOfFailedCalls).isEqualTo(0)
+            assertThat(metrics.numberOfFailedCalls).isZero()
             assertThat(metrics.numberOfSuccessfulCalls).isEqualTo(1)
             // Then the helloWorldService should be invoked 1 time
             assertThat(helloWorldService.invocationCounter).isEqualTo(1)
@@ -110,7 +111,7 @@ class CoroutineCircuitBreakerTest {
             // Given
             val circuitBreaker = CircuitBreaker.ofDefaults("testName")
             val metrics = circuitBreaker.metrics
-            assertThat(metrics.numberOfBufferedCalls).isEqualTo(0)
+            assertThat(metrics.numberOfBufferedCalls).isZero()
             val helloWorldService = CoroutineHelloWorldService()
 
             //When
@@ -127,9 +128,60 @@ class CoroutineCircuitBreakerTest {
             }
             assertThat(metrics.numberOfBufferedCalls).isEqualTo(1)
             assertThat(metrics.numberOfFailedCalls).isEqualTo(1)
+            assertThat(metrics.numberOfSuccessfulCalls).isZero()
+            // Then the helloWorldService should be invoked 1 time
+            assertThat(helloWorldService.invocationCounter).isEqualTo(1)
+        }
+    }
+
+    @Test
+    fun `executeSuspendFunctionAndRecordCancellationError should record a CancellationException`() {
+        testCancellation(
+            { executeSuspendFunctionAndRecordCancellationError(it) },
+            expectedNumberOfFailedCalls = 1
+        )
+    }
+
+    @Test
+    fun `executeSuspendFunction should ignore a CancellationException`() {
+        testCancellation(
+            { executeSuspendFunction(it) },
+            expectedNumberOfFailedCalls = 0
+        )
+    }
+
+    private fun testCancellation(
+        execute: suspend (CircuitBreaker.(suspend () -> Unit) -> Unit),
+        expectedNumberOfFailedCalls: Int
+    ) {
+        // Given
+        val circuitBreaker = CircuitBreaker.ofDefaults("testName")
+        val metrics = circuitBreaker.metrics
+        assertThat(metrics.numberOfBufferedCalls).isEqualTo(0)
+        val helloWorldService = CoroutineHelloWorldService()
+        var cancellationException: CancellationException? = null
+        //When
+        runBlocking {
+            val job = launch {
+                try {
+                    circuitBreaker.execute(helloWorldService::cancel)
+                    Assertions.failBecauseExceptionWasNotThrown<Nothing>(CancellationException::class.java)
+                } catch (expected: CancellationException) {
+                    cancellationException = expected
+                }
+
+            }
+            job.join()
+            //Then
+            assertThat(job.isCancelled).isTrue
+            assertThat(cancellationException).isNotNull
+            assertThat(cancellationException!!.message).isEqualTo("test cancel")
+            assertThat(metrics.numberOfBufferedCalls).isEqualTo(expectedNumberOfFailedCalls)
+            assertThat(metrics.numberOfFailedCalls).isEqualTo(expectedNumberOfFailedCalls)
             assertThat(metrics.numberOfSuccessfulCalls).isEqualTo(0)
             // Then the helloWorldService should be invoked 1 time
             assertThat(helloWorldService.invocationCounter).isEqualTo(1)
         }
     }
+
 }

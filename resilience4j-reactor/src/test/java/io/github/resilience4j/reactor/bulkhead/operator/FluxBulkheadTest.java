@@ -1,5 +1,5 @@
 /*
- * Copyright 2018 Julien Hoarau
+ * Copyright 2026 Julien Hoarau
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,30 +17,31 @@ package io.github.resilience4j.reactor.bulkhead.operator;
 
 import io.github.resilience4j.bulkhead.Bulkhead;
 import io.github.resilience4j.bulkhead.BulkheadFullException;
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Flux;
 import reactor.test.StepVerifier;
 
 import java.io.IOException;
 import java.time.Duration;
+import java.util.concurrent.CompletableFuture;
 
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.*;
 
-public class FluxBulkheadTest {
-
+class FluxBulkheadTest {
 
     private Bulkhead bulkhead;
 
-    @Before
-    public void setUp() {
+    @BeforeEach
+    void setUp() {
         bulkhead = mock(Bulkhead.class, RETURNS_DEEP_STUBS);
     }
 
     @Test
-    public void shouldEmitEvent() {
-        given(bulkhead.tryAcquirePermission()).willReturn(true);
+    void shouldEmitEvent() {
+        given(bulkhead.acquirePermissionAsync())
+            .willReturn(CompletableFuture.completedFuture(null));
 
         StepVerifier.create(
             Flux.just("Event 1", "Event 2")
@@ -53,8 +54,9 @@ public class FluxBulkheadTest {
     }
 
     @Test
-    public void shouldPropagateError() {
-        given(bulkhead.tryAcquirePermission()).willReturn(true);
+    void shouldPropagateError() {
+        given(bulkhead.acquirePermissionAsync())
+            .willReturn(CompletableFuture.completedFuture(null));
 
         StepVerifier.create(
             Flux.error(new IOException("BAM!"))
@@ -67,9 +69,10 @@ public class FluxBulkheadTest {
     }
 
     @Test
-    public void shouldEmitErrorWithBulkheadFullException() {
-        given(bulkhead.tryAcquirePermission()).willReturn(false);
-        bulkhead.tryAcquirePermission();
+    void shouldEmitErrorWithBulkheadFullException() {
+        CompletableFuture<Void> rejectedPermission = CompletableFuture
+            .failedFuture(BulkheadFullException.createBulkheadFullException(bulkhead));
+        given(bulkhead.acquirePermissionAsync()).willReturn(rejectedPermission);
 
         StepVerifier.create(
             Flux.just("Event")
@@ -82,8 +85,10 @@ public class FluxBulkheadTest {
     }
 
     @Test
-    public void shouldEmitBulkheadFullExceptionEvenWhenErrorDuringSubscribe() {
-        given(bulkhead.tryAcquirePermission()).willReturn(false);
+    void shouldEmitBulkheadFullExceptionEvenWhenErrorDuringSubscribe() {
+        CompletableFuture<Void> rejectedPermission = CompletableFuture
+            .failedFuture(BulkheadFullException.createBulkheadFullException(bulkhead));
+        given(bulkhead.acquirePermissionAsync()).willReturn(rejectedPermission);
 
         StepVerifier.create(
             Flux.error(new IOException("BAM!"))
@@ -96,8 +101,10 @@ public class FluxBulkheadTest {
     }
 
     @Test
-    public void shouldEmitBulkheadFullExceptionEvenWhenErrorNotOnSubscribe() {
-        given(bulkhead.tryAcquirePermission()).willReturn(false);
+    void shouldEmitBulkheadFullExceptionEvenWhenErrorNotOnSubscribe() {
+        CompletableFuture<Void> rejectedPermission = CompletableFuture
+            .failedFuture(BulkheadFullException.createBulkheadFullException(bulkhead));
+        given(bulkhead.acquirePermissionAsync()).willReturn(rejectedPermission);
 
         StepVerifier.create(
             Flux.error(new IOException("BAM!"), true)
@@ -110,8 +117,9 @@ public class FluxBulkheadTest {
     }
 
     @Test
-    public void shouldReleaseBulkheadSemaphoreOnCancel() {
-        given(bulkhead.tryAcquirePermission()).willReturn(true);
+    void shouldReleaseBulkheadSemaphoreOnCancel() {
+        given(bulkhead.acquirePermissionAsync())
+            .willReturn(CompletableFuture.completedFuture(null));
 
         StepVerifier.create(
             Flux.just("Event")
@@ -125,8 +133,9 @@ public class FluxBulkheadTest {
     }
 
     @Test
-    public void shouldInvokeOnCompleteOnCancelWhenEventWasEmitted() {
-        given(bulkhead.tryAcquirePermission()).willReturn(true);
+    void shouldInvokeOnCompleteOnCancelWhenEventWasEmitted() {
+        given(bulkhead.acquirePermissionAsync())
+            .willReturn(CompletableFuture.completedFuture(null));
 
         StepVerifier.create(
             Flux.just("Event1", "Event2", "Event3")
@@ -137,6 +146,24 @@ public class FluxBulkheadTest {
             .verify();
 
         verify(bulkhead, never()).releasePermission();
+        verify(bulkhead, times(1)).onComplete();
+    }
+
+    @Test
+    void shouldOnceEmitCompleteWhenErrorInCompleteEvent() {
+        given(bulkhead.acquirePermissionAsync())
+            .willReturn(CompletableFuture.completedFuture(null));
+        doThrow(new RuntimeException("BAM!")).when(bulkhead).onComplete();
+
+        StepVerifier.create(
+            Flux.just("Event1", "Event2", "Event3")
+                .transformDeferred(BulkheadOperator.of(bulkhead)))
+            .expectNext("Event1")
+            .expectNext("Event2")
+            .expectNext("Event3")
+            .expectError(RuntimeException.class)
+            .verify(Duration.ofSeconds(1));
+
         verify(bulkhead, times(1)).onComplete();
     }
 }

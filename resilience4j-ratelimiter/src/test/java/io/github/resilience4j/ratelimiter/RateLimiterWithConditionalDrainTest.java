@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright 2016 Robert Winkler and Bohdan Storozhuk
+ *  Copyright 2026 Robert Winkler and Bohdan Storozhuk
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -18,11 +18,12 @@
  */
 package io.github.resilience4j.ratelimiter;
 
-import io.vavr.CheckedFunction0;
-import io.vavr.control.Either;
+import io.github.resilience4j.core.functions.CheckedSupplier;
+import io.github.resilience4j.core.functions.Either;
+import io.github.resilience4j.ratelimiter.internal.AtomicRateLimiter;
 import io.vavr.control.Try;
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
 import java.util.function.Predicate;
@@ -30,12 +31,11 @@ import java.util.function.Predicate;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
-import static org.mockito.BDDMockito.willCallRealMethod;
 import static org.mockito.Mockito.*;
 
 
 @SuppressWarnings("unchecked")
-public class RateLimiterWithConditionalDrainTest {
+class RateLimiterWithConditionalDrainTest {
 
     private static final int LIMIT = 50;
     private static final Duration TIMEOUT = Duration.ofSeconds(5);
@@ -44,8 +44,8 @@ public class RateLimiterWithConditionalDrainTest {
     private Predicate<Either<? extends Throwable, ?>> drainConditionChecker;
     private RateLimiter limit;
 
-    @Before
-    public void init() {
+    @BeforeEach
+    void init() {
         drainConditionChecker = mock(Predicate.class);
         RateLimiterConfig config = RateLimiterConfig.custom()
             .timeoutDuration(TIMEOUT)
@@ -53,22 +53,19 @@ public class RateLimiterWithConditionalDrainTest {
             .limitForPeriod(LIMIT)
             .drainPermissionsOnResult(drainConditionChecker)
             .build();
-        limit = mock(RateLimiter.class);
-        willCallRealMethod().given(limit).onResult(any());
-        willCallRealMethod().given(limit).onSuccess();
-        willCallRealMethod().given(limit).onError(any());
-        willCallRealMethod().given(limit).drainIfNeeded(any());
-        given(limit.getRateLimiterConfig()).willReturn(config);
+        RateLimiter realLimit = new AtomicRateLimiter("test", config);
+        limit = spy(realLimit);
+        doReturn(true).when(limit).acquirePermission(1);
     }
 
     @Test
-    public void decorateCheckedSupplierAndApplyWithDrainConditionNotMet() throws Throwable {
-        CheckedFunction0<?> supplier = mock(CheckedFunction0.class);
-        CheckedFunction0<?> decorated = RateLimiter.decorateCheckedSupplier(limit, supplier);
+    void decorateCheckedSupplierAndApplyWithDrainConditionNotMet() {
+        CheckedSupplier<?> supplier = mock(CheckedSupplier.class);
+        CheckedSupplier<?> decorated = RateLimiter.decorateCheckedSupplier(limit, supplier);
         given(limit.acquirePermission(1)).willReturn(true);
         given(drainConditionChecker.test(any())).willReturn(false);
 
-        Try<?> result = Try.of(decorated);
+        Try<?> result = Try.of(() -> decorated.get());
 
         assertThat(result.isSuccess()).isTrue();
         verify(drainConditionChecker).test(argThat(Either::isRight));
@@ -76,14 +73,14 @@ public class RateLimiterWithConditionalDrainTest {
     }
 
     @Test
-    public void decorateFailingCheckedSupplierAndApplyWithDrainConditionNotMet() throws Throwable {
-        CheckedFunction0<?> supplier = mock(CheckedFunction0.class);
-        when(supplier.apply()).thenThrow(RuntimeException.class);
-        CheckedFunction0<?> decorated = RateLimiter.decorateCheckedSupplier(limit, supplier);
+    void decorateFailingCheckedSupplierAndApplyWithDrainConditionNotMet() throws Throwable {
+        CheckedSupplier<?> supplier = mock(CheckedSupplier.class);
+        when(supplier.get()).thenThrow(RuntimeException.class);
+        CheckedSupplier<?> decorated = RateLimiter.decorateCheckedSupplier(limit, supplier);
         given(limit.acquirePermission(1)).willReturn(true);
         given(drainConditionChecker.test(any())).willReturn(false);
 
-        Try<?> result = Try.of(decorated);
+        final Try<?> result = Try.of(() -> decorated.get());
 
         assertThat(result.isFailure()).isTrue();
         verify(drainConditionChecker).test(argThat(Either::isLeft));
@@ -91,13 +88,13 @@ public class RateLimiterWithConditionalDrainTest {
     }
 
     @Test
-    public void decorateCheckedSupplierAndApplyWithDrainConditionMet() throws Throwable {
-        CheckedFunction0<?> supplier = mock(CheckedFunction0.class);
-        CheckedFunction0<?> decorated = RateLimiter.decorateCheckedSupplier(limit, supplier);
+    void decorateCheckedSupplierAndApplyWithDrainConditionMet() {
+        CheckedSupplier<?> supplier = mock(CheckedSupplier.class);
+        CheckedSupplier<?> decorated = RateLimiter.decorateCheckedSupplier(limit, supplier);
         given(limit.acquirePermission(1)).willReturn(true);
         given(drainConditionChecker.test(any())).willReturn(true);
 
-        Try<?> result = Try.of(decorated);
+        Try<?> result = Try.of(() -> decorated.get());
 
         assertThat(result.isSuccess()).isTrue();
         verify(drainConditionChecker).test(argThat(Either::isRight));

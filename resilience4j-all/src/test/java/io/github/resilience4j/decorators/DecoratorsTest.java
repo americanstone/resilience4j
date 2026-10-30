@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright 2016 Robert Winkler
+ *  Copyright 2026 Robert Winkler
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -25,6 +25,10 @@ import io.github.resilience4j.cache.Cache;
 import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.core.ContextAwareScheduledThreadPoolExecutor;
+import io.github.resilience4j.core.functions.CheckedConsumer;
+import io.github.resilience4j.core.functions.CheckedFunction;
+import io.github.resilience4j.core.functions.CheckedRunnable;
+import io.github.resilience4j.core.functions.CheckedSupplier;
 import io.github.resilience4j.ratelimiter.RateLimiter;
 import io.github.resilience4j.ratelimiter.RateLimiterConfig;
 import io.github.resilience4j.ratelimiter.RequestNotPermitted;
@@ -32,48 +36,56 @@ import io.github.resilience4j.retry.Retry;
 import io.github.resilience4j.test.AsyncHelloWorldService;
 import io.github.resilience4j.test.HelloWorldException;
 import io.github.resilience4j.test.HelloWorldService;
-import io.github.resilience4j.test.TestContextPropagators.TestThreadLocalContextPropagatorWithHolder;
 import io.github.resilience4j.test.TestContextPropagators.TestThreadLocalContextPropagatorWithHolder.TestThreadLocalContextHolder;
+import io.github.resilience4j.test.TestContextPropagators.TestThreadLocalContextPropagatorWithHolder;
 import io.github.resilience4j.timelimiter.TimeLimiter;
 import io.github.resilience4j.timelimiter.TimeLimiterConfig;
-import io.vavr.CheckedFunction0;
-import io.vavr.CheckedFunction1;
-import io.vavr.CheckedRunnable;
-import io.vavr.control.Try;
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.slf4j.MDC;
 
 import java.io.IOException;
 import java.time.Duration;
 import java.util.Map;
-import java.util.concurrent.*;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
-import static com.jayway.awaitility.Awaitility.matches;
-import static com.jayway.awaitility.Awaitility.waitAtMost;
 import static java.util.Arrays.asList;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.awaitility.Awaitility.await;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
-import static org.mockito.Mockito.*;
+import static org.mockito.BDDMockito.willDoNothing;
+import static org.mockito.BDDMockito.willThrow;
+import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
+import static org.mockito.Mockito.any;
+import static org.mockito.Mockito.isA;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.times;
 
-public class DecoratorsTest {
+class DecoratorsTest {
 
     private boolean state = false;
     private HelloWorldService helloWorldService;
     private AsyncHelloWorldService asyncHelloWorldService;
 
-    @Before
-    public void setUp() {
+    @BeforeEach
+    void setUp() {
         helloWorldService = mock(HelloWorldService.class);
         asyncHelloWorldService = mock(AsyncHelloWorldService.class);
     }
 
     @Test
-    public void shouldThrowTimeoutException() {
+    void shouldThrowTimeoutException() {
         TimeLimiter timeLimiter = TimeLimiter.of("helloBackend", TimeLimiterConfig.custom()
             .timeoutDuration(Duration.ofMillis(100)).build());
         CircuitBreaker circuitBreaker = CircuitBreaker.ofDefaults("helloBackend");
@@ -92,18 +104,18 @@ public class DecoratorsTest {
             .hasCauseInstanceOf(TimeoutException.class);
 
         CircuitBreaker.Metrics metrics = circuitBreaker.getMetrics();
-        assertThat(metrics.getNumberOfBufferedCalls()).isEqualTo(1);
-        assertThat(metrics.getNumberOfFailedCalls()).isEqualTo(1);
+        assertThat(metrics.getNumberOfBufferedCalls()).isOne();
+        assertThat(metrics.getNumberOfFailedCalls()).isOne();
     }
 
     @Test
-    public void shouldThrowTimeoutExceptionAndPropagateContext() {
+    void shouldThrowTimeoutExceptionAndPropagateContext() {
         TimeLimiter timeLimiter = TimeLimiter.of("helloBackend", TimeLimiterConfig.custom()
             .timeoutDuration(Duration.ofMillis(100)).build());
         CircuitBreaker circuitBreaker = CircuitBreaker.ofDefaults("helloBackend");
         ThreadPoolBulkhead bulkhead = ThreadPoolBulkhead.ofDefaults("helloBackend");
 
-        TestThreadLocalContextPropagatorWithHolder propagator = new TestThreadLocalContextPropagatorWithHolder();
+        TestThreadLocalContextPropagatorWithHolder<String> propagator = new TestThreadLocalContextPropagatorWithHolder<>();
         TestThreadLocalContextHolder.put("ValueShouldCrossThreadBoundary");
         ContextAwareScheduledThreadPoolExecutor scheduledThreadPool = ContextAwareScheduledThreadPoolExecutor
             .newScheduledThreadPool()
@@ -131,16 +143,16 @@ public class DecoratorsTest {
             return null;
         });
 
-        waitAtMost(2, TimeUnit.SECONDS).until(matches(() ->
-            assertThat(completableFuture).isCompletedWithValue("ValueShouldCrossThreadBoundary")));
+        await().atMost(2, TimeUnit.SECONDS).untilAsserted(() ->
+            assertThat(completableFuture).isCompletedWithValue("ValueShouldCrossThreadBoundary"));
 
         CircuitBreaker.Metrics metrics = circuitBreaker.getMetrics();
-        assertThat(metrics.getNumberOfBufferedCalls()).isEqualTo(1);
-        assertThat(metrics.getNumberOfFailedCalls()).isEqualTo(1);
+        assertThat(metrics.getNumberOfBufferedCalls()).isOne();
+        assertThat(metrics.getNumberOfFailedCalls()).isOne();
     }
 
     @Test
-    public void shouldThrowTimeoutExceptionAndPropagateMDCContext() {
+    void shouldThrowTimeoutExceptionAndPropagateMDCContext() {
         TimeLimiter timeLimiter = TimeLimiter.of("helloBackend", TimeLimiterConfig.custom()
             .timeoutDuration(Duration.ofMillis(100)).build());
         CircuitBreaker circuitBreaker = CircuitBreaker.ofDefaults("helloBackend");
@@ -168,22 +180,22 @@ public class DecoratorsTest {
         final CompletableFuture<String> completableFuture = completionStage.toCompletableFuture().exceptionally(throwable -> {
             if (throwable != null) {
                 assertThat(Thread.currentThread().getName()).isEqualTo("ContextAwareScheduledThreadPool-1");
-                assertThat(MDC.getCopyOfContextMap()).hasSize(2).containsExactlyEntriesOf(contextMap);
+                assertThat(MDC.getCopyOfContextMap()).containsExactlyEntriesOf(contextMap);
                 return MDC.getCopyOfContextMap().get("key");
             }
             return null;
         });
 
-        waitAtMost(2, TimeUnit.SECONDS).until(matches(() ->
-            assertThat(completableFuture).isCompletedWithValue("ValueShouldPropagateThreadBoundary")));
+        await().atMost(2, TimeUnit.SECONDS).untilAsserted(() ->
+            assertThat(completableFuture).isCompletedWithValue("ValueShouldPropagateThreadBoundary"));
 
         CircuitBreaker.Metrics metrics = circuitBreaker.getMetrics();
-        assertThat(metrics.getNumberOfBufferedCalls()).isEqualTo(1);
-        assertThat(metrics.getNumberOfFailedCalls()).isEqualTo(1);
+        assertThat(metrics.getNumberOfBufferedCalls()).isOne();
+        assertThat(metrics.getNumberOfFailedCalls()).isOne();
     }
 
     @Test
-    public void testDecorateSupplier() {
+    void decorateSupplier() {
         given(helloWorldService.returnHelloWorld()).willReturn("Hello world");
         CircuitBreaker circuitBreaker = CircuitBreaker.ofDefaults("helloBackend");
         Supplier<String> decoratedSupplier = Decorators
@@ -198,13 +210,13 @@ public class DecoratorsTest {
 
         assertThat(result).isEqualTo("Hello world");
         CircuitBreaker.Metrics metrics = circuitBreaker.getMetrics();
-        assertThat(metrics.getNumberOfBufferedCalls()).isEqualTo(1);
-        assertThat(metrics.getNumberOfSuccessfulCalls()).isEqualTo(1);
+        assertThat(metrics.getNumberOfBufferedCalls()).isOne();
+        assertThat(metrics.getNumberOfSuccessfulCalls()).isOne();
         then(helloWorldService).should(times(1)).returnHelloWorld();
     }
 
     @Test
-    public void testDecorateSupplierWithFallbackFromResult() {
+    void decorateSupplierWithFallbackFromResult() {
         given(helloWorldService.returnHelloWorld()).willReturn("Hello world");
         CircuitBreaker circuitBreaker = CircuitBreaker.ofDefaults("helloBackend");
         Supplier<String> decoratedSupplier = Decorators
@@ -217,13 +229,13 @@ public class DecoratorsTest {
 
         assertThat(result).isEqualTo("Bla");
         CircuitBreaker.Metrics metrics = circuitBreaker.getMetrics();
-        assertThat(metrics.getNumberOfBufferedCalls()).isEqualTo(1);
-        assertThat(metrics.getNumberOfSuccessfulCalls()).isEqualTo(1);
+        assertThat(metrics.getNumberOfBufferedCalls()).isOne();
+        assertThat(metrics.getNumberOfSuccessfulCalls()).isOne();
         then(helloWorldService).should(times(1)).returnHelloWorld();
     }
 
     @Test
-    public void testDecorateCallableWithFallbackFromResult() throws Exception {
+    void decorateCallableWithFallbackFromResult() throws Exception {
         given(helloWorldService.returnHelloWorldWithException()).willReturn("Hello world");
         CircuitBreaker circuitBreaker = CircuitBreaker.ofDefaults("helloBackend");
         Callable<String> decoratedSupplier = Decorators
@@ -236,32 +248,58 @@ public class DecoratorsTest {
 
         assertThat(result).isEqualTo("Bla");
         CircuitBreaker.Metrics metrics = circuitBreaker.getMetrics();
-        assertThat(metrics.getNumberOfBufferedCalls()).isEqualTo(1);
-        assertThat(metrics.getNumberOfSuccessfulCalls()).isEqualTo(1);
+        assertThat(metrics.getNumberOfBufferedCalls()).isOne();
+        assertThat(metrics.getNumberOfSuccessfulCalls()).isOne();
         then(helloWorldService).should(times(1)).returnHelloWorldWithException();
     }
 
     @Test
-    public void testDecorateCheckedSupplierWithFallbackFromResult() throws Throwable {
+    void decorateFunctionWithFallbackFromResult() throws Exception {
+        given(helloWorldService.returnHelloWorldWithName("Name")).willReturn("Hello world Name");
+        Function<String, String> decoratedFunction = Decorators
+                .ofFunction((Function<String, String>) str -> helloWorldService.returnHelloWorldWithName(str))
+                .withFallback(result -> result.equals("Hello world Name"), (result) -> "Fallback")
+                .decorate();
+
+        String result = decoratedFunction.apply("Name");
+
+        assertThat(result).isEqualTo("Fallback");
+    }
+
+    @Test
+    void decorateCheckedFunctionWithFallbackFromResult() throws Throwable {
+        given(helloWorldService.returnHelloWorldWithName("Name")).willReturn("Hello world Name");
+        CheckedFunction<String, String> decoratedFunction = Decorators
+                .ofCheckedFunction((CheckedFunction<String, String>) str -> helloWorldService.returnHelloWorldWithName(str))
+                .withFallback(result -> result.equals("Hello world Name"), (result) -> "Fallback")
+                .decorate();
+
+        String result = decoratedFunction.apply("Name");
+
+        assertThat(result).isEqualTo("Fallback");
+    }
+
+    @Test
+    void decorateCheckedSupplierWithFallbackFromResult() throws Throwable {
         given(helloWorldService.returnHelloWorldWithException()).willReturn("Hello world");
         CircuitBreaker circuitBreaker = CircuitBreaker.ofDefaults("helloBackend");
-        CheckedFunction0<String> decoratedSupplier = Decorators
+        CheckedSupplier<String> decoratedSupplier = Decorators
             .ofCheckedSupplier(() -> helloWorldService.returnHelloWorldWithException())
             .withFallback((result) -> result.equals("Hello world"), (result) -> "Bla")
             .withCircuitBreaker(circuitBreaker)
             .decorate();
 
-        String result = decoratedSupplier.apply();
+        String result = decoratedSupplier.get();
 
         assertThat(result).isEqualTo("Bla");
         CircuitBreaker.Metrics metrics = circuitBreaker.getMetrics();
-        assertThat(metrics.getNumberOfBufferedCalls()).isEqualTo(1);
-        assertThat(metrics.getNumberOfSuccessfulCalls()).isEqualTo(1);
+        assertThat(metrics.getNumberOfBufferedCalls()).isOne();
+        assertThat(metrics.getNumberOfSuccessfulCalls()).isOne();
         then(helloWorldService).should(times(1)).returnHelloWorldWithException();
     }
 
     @Test
-    public void testDecorateCompletionStageWithFallbackFromResult() throws Throwable {
+    void decorateCompletionStageWithFallbackFromResult() throws Throwable {
         given(helloWorldService.returnHelloWorld()).willReturn("Hello world");
         CircuitBreaker circuitBreaker = CircuitBreaker.ofDefaults("helloBackend");
 
@@ -277,14 +315,14 @@ public class DecoratorsTest {
 
         assertThat(result).isEqualTo("Bla");
         CircuitBreaker.Metrics metrics = circuitBreaker.getMetrics();
-        assertThat(metrics.getNumberOfBufferedCalls()).isEqualTo(1);
-        assertThat(metrics.getNumberOfSuccessfulCalls()).isEqualTo(1);
+        assertThat(metrics.getNumberOfBufferedCalls()).isOne();
+        assertThat(metrics.getNumberOfSuccessfulCalls()).isOne();
         then(helloWorldService).should(times(1)).returnHelloWorld();
     }
 
     @Test
-    public void testDecorateSupplierWithThreadPoolBulkhead()
-        throws ExecutionException, InterruptedException {
+    void decorateSupplierWithThreadPoolBulkhead()
+        throws Exception {
 
         given(helloWorldService.returnHelloWorld()).willReturn("Hello world");
         CircuitBreaker circuitBreaker = CircuitBreaker.ofDefaults("helloBackend");
@@ -300,14 +338,14 @@ public class DecoratorsTest {
 
         assertThat(result).isEqualTo("Hello world");
         CircuitBreaker.Metrics metrics = circuitBreaker.getMetrics();
-        assertThat(metrics.getNumberOfBufferedCalls()).isEqualTo(1);
-        assertThat(metrics.getNumberOfSuccessfulCalls()).isEqualTo(1);
+        assertThat(metrics.getNumberOfBufferedCalls()).isOne();
+        assertThat(metrics.getNumberOfSuccessfulCalls()).isOne();
         then(helloWorldService).should(times(1)).returnHelloWorld();
     }
 
     @Test
-    public void testDecorateRunnableWithThreadPoolBulkhead()
-        throws ExecutionException, InterruptedException {
+    void decorateRunnableWithThreadPoolBulkhead()
+        throws Exception {
 
         CircuitBreaker circuitBreaker = CircuitBreaker.ofDefaults("helloBackend");
 
@@ -320,13 +358,13 @@ public class DecoratorsTest {
         future.get();
 
         CircuitBreaker.Metrics metrics = circuitBreaker.getMetrics();
-        assertThat(metrics.getNumberOfBufferedCalls()).isEqualTo(1);
-        assertThat(metrics.getNumberOfSuccessfulCalls()).isEqualTo(1);
+        assertThat(metrics.getNumberOfBufferedCalls()).isOne();
+        assertThat(metrics.getNumberOfSuccessfulCalls()).isOne();
         then(helloWorldService).should(times(1)).sayHelloWorld();
     }
 
     @Test
-    public void testDecorateCallable() throws Exception {
+    void decorateCallable() throws Exception {
         given(helloWorldService.returnHelloWorldWithException()).willReturn("Hello world");
         CircuitBreaker circuitBreaker = CircuitBreaker.ofDefaults("helloBackend");
         Callable<String> decoratedCallable = Decorators
@@ -341,13 +379,13 @@ public class DecoratorsTest {
 
         assertThat(result).isEqualTo("Hello world");
         CircuitBreaker.Metrics metrics = circuitBreaker.getMetrics();
-        assertThat(metrics.getNumberOfBufferedCalls()).isEqualTo(1);
-        assertThat(metrics.getNumberOfSuccessfulCalls()).isEqualTo(1);
+        assertThat(metrics.getNumberOfBufferedCalls()).isOne();
+        assertThat(metrics.getNumberOfSuccessfulCalls()).isOne();
         then(helloWorldService).should(times(1)).returnHelloWorldWithException();
     }
 
     @Test
-    public void testDecorateSupplierWithFallback() {
+    void decorateSupplierWithFallback() {
         CircuitBreaker circuitBreaker = CircuitBreaker.ofDefaults("helloBackend");
         circuitBreaker.transitionToOpenState();
 
@@ -361,15 +399,15 @@ public class DecoratorsTest {
 
         assertThat(result).isEqualTo("Fallback");
         CircuitBreaker.Metrics metrics = circuitBreaker.getMetrics();
-        assertThat(metrics.getNumberOfNotPermittedCalls()).isEqualTo(1);
+        assertThat(metrics.getNumberOfNotPermittedCalls()).isOne();
         then(helloWorldService).should(never()).returnHelloWorld();
     }
 
     @Test
-    public void testDecorateCheckedSupplier() throws IOException {
+    void decorateCheckedSupplier() throws Throwable {
         given(helloWorldService.returnHelloWorldWithException()).willReturn("Hello world");
         CircuitBreaker circuitBreaker = CircuitBreaker.ofDefaults("helloBackend");
-        CheckedFunction0<String> decoratedSupplier = Decorators
+        CheckedSupplier<String> decoratedSupplier = Decorators
             .ofCheckedSupplier(() -> helloWorldService.returnHelloWorldWithException())
             .withCircuitBreaker(circuitBreaker)
             .withRetry(Retry.ofDefaults("id"))
@@ -377,36 +415,84 @@ public class DecoratorsTest {
             .withBulkhead(Bulkhead.ofDefaults("testName"))
             .decorate();
 
-        String result = Try.of(decoratedSupplier).get();
+        String result = decoratedSupplier.get();
 
         assertThat(result).isEqualTo("Hello world");
         CircuitBreaker.Metrics metrics = circuitBreaker.getMetrics();
-        assertThat(metrics.getNumberOfBufferedCalls()).isEqualTo(1);
-        assertThat(metrics.getNumberOfSuccessfulCalls()).isEqualTo(1);
+        assertThat(metrics.getNumberOfBufferedCalls()).isOne();
+        assertThat(metrics.getNumberOfSuccessfulCalls()).isOne();
         then(helloWorldService).should(times(1)).returnHelloWorldWithException();
     }
 
     @Test
-    public void testDecorateCheckedSupplierWithFallback() throws Throwable {
+    void decorateCheckedSupplierWithFallback() throws Throwable {
         CircuitBreaker circuitBreaker = CircuitBreaker.ofDefaults("helloBackend");
         circuitBreaker.transitionToOpenState();
 
-        CheckedFunction0<String> checkedSupplier = Decorators
+        CheckedSupplier<String> checkedSupplier = Decorators
             .ofCheckedSupplier(() -> helloWorldService.returnHelloWorldWithException())
             .withCircuitBreaker(circuitBreaker)
             .withFallback(CallNotPermittedException.class, e -> "Fallback")
             .decorate();
 
-        String result = checkedSupplier.apply();
+        String result = checkedSupplier.get();
 
         assertThat(result).isEqualTo("Fallback");
         CircuitBreaker.Metrics metrics = circuitBreaker.getMetrics();
-        assertThat(metrics.getNumberOfNotPermittedCalls()).isEqualTo(1);
+        assertThat(metrics.getNumberOfNotPermittedCalls()).isOne();
         then(helloWorldService).should(never()).returnHelloWorld();
     }
 
     @Test
-    public void testDecorateCallableWithFallback() throws Throwable {
+    void decorateCheckedSupplierWithThreadPoolBulkheadSucceeds() throws Exception {
+        String expected = "Hello world";
+        given(helloWorldService.returnHelloWorldWithException()).willReturn(expected);
+        ThreadPoolBulkhead threadPoolBulkhead = ThreadPoolBulkhead.ofDefaults("helloBackend");
+
+        CompletionStage<String> completionStage = Decorators
+                .ofCheckedSupplier(() -> helloWorldService.returnHelloWorldWithException())
+                .withThreadPoolBulkhead(threadPoolBulkhead)
+                .get();
+
+        // make sure normal execution is successful
+        String actual = completionStage.toCompletableFuture().get();
+        assertThat(actual).isEqualTo(expected);
+    }
+
+    @Test
+    void decorateCheckedSupplierWithThreadPoolBulkheadWithExceptionThrown() throws Exception {
+        IOException exception = new IOException("thrown from mock");
+        given(helloWorldService.returnHelloWorldWithException()).willThrow(exception);
+        ThreadPoolBulkhead threadPoolBulkhead = ThreadPoolBulkhead.ofDefaults("helloBackend");
+
+        CompletionStage<String> completionStage = Decorators
+                .ofCheckedSupplier(() -> helloWorldService.returnHelloWorldWithException())
+                .withThreadPoolBulkhead(threadPoolBulkhead)
+                .get();
+
+        assertThatThrownBy(() -> completionStage.toCompletableFuture().get())
+                .hasCause(exception);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void decorateCheckedSupplierWithThreadPoolBulkheadFull() throws Exception {
+        given(helloWorldService.returnHelloWorldWithException()).willReturn("Hello world");
+        ThreadPoolBulkhead threadPoolBulkheadMock = mock(ThreadPoolBulkhead.class, RETURNS_DEEP_STUBS);
+
+        willThrow(BulkheadFullException.createBulkheadFullException(threadPoolBulkheadMock)).given(threadPoolBulkheadMock).submit(isA(Callable.class));
+        willDoNothing().given(helloWorldService).sayHelloWorldWithException();
+
+        CompletionStage<String> completionStage = Decorators
+                .ofCheckedSupplier(() -> helloWorldService.returnHelloWorldWithException())
+                .withThreadPoolBulkhead(threadPoolBulkheadMock)
+                .get();
+        assertThatThrownBy(() -> completionStage.toCompletableFuture().get())
+                .hasCauseInstanceOf(BulkheadFullException.class);
+    }
+
+    @Test
+    void decorateCallableWithFallback() throws Throwable {
         CircuitBreaker circuitBreaker = CircuitBreaker.ofDefaults("helloBackend");
         circuitBreaker.transitionToOpenState();
 
@@ -420,14 +506,16 @@ public class DecoratorsTest {
 
         assertThat(result).isEqualTo("Fallback");
         CircuitBreaker.Metrics metrics = circuitBreaker.getMetrics();
-        assertThat(metrics.getNumberOfNotPermittedCalls()).isEqualTo(1);
+        assertThat(metrics.getNumberOfNotPermittedCalls()).isOne();
         then(helloWorldService).should(never()).returnHelloWorld();
     }
 
     @Test
-    public void testDecorateSupplierWithBulkheadFullExceptionFallback() throws ExecutionException, InterruptedException {
+    @SuppressWarnings("unchecked")
+    void decorateSupplierWithBulkheadFullExceptionFallback() throws Exception {
         ThreadPoolBulkhead bulkhead = ThreadPoolBulkhead.ofDefaults("helloBackend");
         ThreadPoolBulkhead bulkheadMock = spy(bulkhead);
+
         given(bulkheadMock.submit(any(Callable.class))).willThrow(BulkheadFullException.createBulkheadFullException(bulkhead));
 
         CompletionStage<String> completionStage = Decorators
@@ -442,7 +530,8 @@ public class DecoratorsTest {
     }
 
     @Test
-    public void testDecorateCallableWithBulkheadFullExceptionFallback() throws ExecutionException, InterruptedException {
+    @SuppressWarnings("unchecked")
+    void decorateCallableWithBulkheadFullExceptionFallback() throws Exception {
         ThreadPoolBulkhead bulkhead = ThreadPoolBulkhead.ofDefaults("helloBackend");
         ThreadPoolBulkhead bulkheadMock = spy(bulkhead);
         given(bulkheadMock.submit(any(Callable.class))).willThrow(BulkheadFullException.createBulkheadFullException(bulkhead));
@@ -459,7 +548,8 @@ public class DecoratorsTest {
     }
 
     @Test
-    public void testDecorateRunnableWithBulkheadFullExceptionFallback() throws ExecutionException, InterruptedException {
+    @SuppressWarnings("unchecked")
+    void decorateRunnableWithBulkheadFullExceptionFallback() throws Exception {
         ThreadPoolBulkhead bulkhead = ThreadPoolBulkhead.ofDefaults("helloBackend");
         ThreadPoolBulkhead bulkheadMock = spy(bulkhead);
         given(bulkheadMock.submit(any(Callable.class))).willThrow(BulkheadFullException.createBulkheadFullException(bulkhead));
@@ -480,7 +570,7 @@ public class DecoratorsTest {
 
 
     @Test
-    public void testDecorateCompletionStageWithCallNotPermittedExceptionFallback() throws ExecutionException, InterruptedException {
+    void decorateCompletionStageWithCallNotPermittedExceptionFallback() throws Exception {
         CircuitBreaker circuitBreaker = CircuitBreaker.ofDefaults("helloBackend");
         circuitBreaker.transitionToOpenState();
         ThreadPoolBulkhead bulkhead = ThreadPoolBulkhead.ofDefaults("helloBackend");
@@ -495,11 +585,11 @@ public class DecoratorsTest {
 
         assertThat(result).isEqualTo("Fallback");
         CircuitBreaker.Metrics metrics = circuitBreaker.getMetrics();
-        assertThat(metrics.getNumberOfNotPermittedCalls()).isEqualTo(1);
+        assertThat(metrics.getNumberOfNotPermittedCalls()).isOne();
     }
 
     @Test
-    public void testDecorateCompletionStageWithTimeoutExceptionFallback() throws ExecutionException, InterruptedException {
+    void decorateCompletionStageWithTimeoutExceptionFallback() throws Exception {
         TimeLimiter timeLimiter = TimeLimiter.of("helloBackend", TimeLimiterConfig.custom()
             .timeoutDuration(Duration.ofMillis(100)).build());
         CircuitBreaker circuitBreaker = CircuitBreaker.ofDefaults("helloBackend");
@@ -519,11 +609,11 @@ public class DecoratorsTest {
 
         assertThat(result).isEqualTo("Fallback");
         CircuitBreaker.Metrics metrics = circuitBreaker.getMetrics();
-        assertThat(metrics.getNumberOfFailedCalls()).isEqualTo(1);
+        assertThat(metrics.getNumberOfFailedCalls()).isOne();
     }
 
     @Test
-    public void testDecorateRunnable() {
+    void decorateRunnable() {
         CircuitBreaker circuitBreaker = CircuitBreaker.ofDefaults("helloBackend");
         Runnable decoratedRunnable = Decorators
             .ofRunnable(() -> helloWorldService.sayHelloWorld())
@@ -536,14 +626,14 @@ public class DecoratorsTest {
         decoratedRunnable.run();
 
         CircuitBreaker.Metrics metrics = circuitBreaker.getMetrics();
-        assertThat(metrics.getNumberOfBufferedCalls()).isEqualTo(1);
-        assertThat(metrics.getNumberOfSuccessfulCalls()).isEqualTo(1);
+        assertThat(metrics.getNumberOfBufferedCalls()).isOne();
+        assertThat(metrics.getNumberOfSuccessfulCalls()).isOne();
         then(helloWorldService).should(times(1)).sayHelloWorld();
     }
 
 
     @Test
-    public void testDecorateCheckedRunnable() throws IOException {
+    void decorateCheckedRunnable() throws Throwable {
         CircuitBreaker circuitBreaker = CircuitBreaker.ofDefaults("helloBackend");
         CheckedRunnable decoratedRunnable = Decorators
             .ofCheckedRunnable(() -> helloWorldService.sayHelloWorldWithException())
@@ -553,17 +643,60 @@ public class DecoratorsTest {
             .withBulkhead(Bulkhead.ofDefaults("testName"))
             .decorate();
 
-        Try.run(decoratedRunnable);
+        decoratedRunnable.run();
 
         CircuitBreaker.Metrics metrics = circuitBreaker.getMetrics();
-        assertThat(metrics.getNumberOfBufferedCalls()).isEqualTo(1);
-        assertThat(metrics.getNumberOfSuccessfulCalls()).isEqualTo(1);
+        assertThat(metrics.getNumberOfBufferedCalls()).isOne();
+        assertThat(metrics.getNumberOfSuccessfulCalls()).isOne();
         then(helloWorldService).should(times(1)).sayHelloWorldWithException();
     }
 
+    @Test
+    void decorateCheckedRunnableWithThreadPoolBulkheadSucceeds() throws Exception {
+        willDoNothing().given(helloWorldService).sayHelloWorldWithException();
+        ThreadPoolBulkhead threadPoolBulkhead = ThreadPoolBulkhead.ofDefaults("helloBackend");
+
+        CompletionStage<Void> completionStage = Decorators
+                .ofCheckedRunnable(() -> helloWorldService.sayHelloWorldWithException())
+                .withThreadPoolBulkhead(threadPoolBulkhead)
+                .get();
+
+        // make sure normal execution is successful
+        completionStage.toCompletableFuture().get();
+    }
 
     @Test
-    public void testDecorateCompletionStage() throws ExecutionException, InterruptedException {
+    void decorateCheckedRunnableWithThreadPoolBulkheadWithExceptionThrown() throws Exception {
+        IOException exception = new IOException("thrown from mock");
+        willThrow(exception).given(helloWorldService).sayHelloWorldWithException();
+        ThreadPoolBulkhead threadPoolBulkhead = ThreadPoolBulkhead.ofDefaults("helloBackend");
+
+        CompletionStage<Void> completionStage = Decorators
+                .ofCheckedRunnable(() -> helloWorldService.sayHelloWorldWithException())
+                .withThreadPoolBulkhead(threadPoolBulkhead)
+                .get();
+
+        assertThatThrownBy(() -> completionStage.toCompletableFuture().get())
+                .hasCause(exception);
+    }
+
+    @Test
+    void decorateCheckedRunnableWithThreadPoolBulkheadFull() throws Exception {
+        ThreadPoolBulkhead threadPoolBulkheadMock = mock(ThreadPoolBulkhead.class, RETURNS_DEEP_STUBS);
+
+        willThrow(BulkheadFullException.createBulkheadFullException(threadPoolBulkheadMock)).given(threadPoolBulkheadMock).submit(any(Runnable.class));
+        willDoNothing().given(helloWorldService).sayHelloWorldWithException();
+
+        CompletionStage<Void> completionStage = Decorators
+                .ofCheckedRunnable(() -> helloWorldService.sayHelloWorldWithException())
+                .withThreadPoolBulkhead(threadPoolBulkheadMock)
+                .get();
+        assertThatThrownBy(() -> completionStage.toCompletableFuture().get())
+                .hasCauseInstanceOf(BulkheadFullException.class);
+    }
+
+    @Test
+    void decorateCompletionStage() throws Exception {
         given(helloWorldService.returnHelloWorld()).willReturn("Hello world");
         CircuitBreaker circuitBreaker = CircuitBreaker.ofDefaults("helloBackend");
         Supplier<CompletionStage<String>> completionStageSupplier =
@@ -579,17 +712,17 @@ public class DecoratorsTest {
 
         assertThat(value).isEqualTo("Hello world");
         CircuitBreaker.Metrics metrics = circuitBreaker.getMetrics();
-        assertThat(metrics.getNumberOfBufferedCalls()).isEqualTo(1);
-        assertThat(metrics.getNumberOfSuccessfulCalls()).isEqualTo(1);
+        assertThat(metrics.getNumberOfBufferedCalls()).isOne();
+        assertThat(metrics.getNumberOfSuccessfulCalls()).isOne();
         then(helloWorldService).should(times(1)).returnHelloWorld();
     }
 
     @Test
-    public void testDecorateCompletionStagePropagatesContextWithRetryAsync() {
+    void decorateCompletionStagePropagatesContextWithRetryAsync() {
         given(helloWorldService.returnHelloWorld()).willReturn("Hello world");
         CircuitBreaker circuitBreaker = CircuitBreaker.ofDefaults("helloBackend");
 
-        TestThreadLocalContextPropagatorWithHolder propagator = new TestThreadLocalContextPropagatorWithHolder();
+        TestThreadLocalContextPropagatorWithHolder<String> propagator = new TestThreadLocalContextPropagatorWithHolder<>();
         TestThreadLocalContextHolder.put("ValueShouldCrossThreadBoundary");
         ContextAwareScheduledThreadPoolExecutor scheduledThreadPool = ContextAwareScheduledThreadPoolExecutor
             .newScheduledThreadPool()
@@ -618,8 +751,8 @@ public class DecoratorsTest {
             return null;
         });
 
-        waitAtMost(2, TimeUnit.SECONDS).until(matches(() ->
-            assertThat(completableFuture).isCompletedWithValue("ValueShouldCrossThreadBoundary")));
+        await().atMost(2, TimeUnit.SECONDS).untilAsserted(() ->
+            assertThat(completableFuture).isCompletedWithValue("ValueShouldCrossThreadBoundary"));
 
         CircuitBreaker.Metrics metrics = circuitBreaker.getMetrics();
         assertThat(metrics.getNumberOfBufferedCalls()).isEqualTo(3);
@@ -628,7 +761,7 @@ public class DecoratorsTest {
     }
 
     @Test
-    public void testDecorateCompletionStagePropagatesMDCContextWithRetryAsync() {
+    void decorateCompletionStagePropagatesMDCContextWithRetryAsync() {
         given(helloWorldService.returnHelloWorld()).willReturn("Hello world");
         CircuitBreaker circuitBreaker = CircuitBreaker.ofDefaults("helloBackend");
 
@@ -655,14 +788,14 @@ public class DecoratorsTest {
         final CompletableFuture<String> completableFuture = completionStage.toCompletableFuture().exceptionally(throwable -> {
             if (throwable != null) {
                 assertThat(Thread.currentThread().getName()).contains("ContextAwareScheduledThreadPool");
-                assertThat(MDC.getCopyOfContextMap()).hasSize(2).containsExactlyEntriesOf(contextMap);
+                assertThat(MDC.getCopyOfContextMap()).containsExactlyEntriesOf(contextMap);
                 return MDC.getCopyOfContextMap().get("key");
             }
             return null;
         });
 
-        waitAtMost(2, TimeUnit.SECONDS).until(matches(() ->
-            assertThat(completableFuture).isCompletedWithValue("ValueShouldCrossThreadBoundary")));
+        await().atMost(2, TimeUnit.SECONDS).untilAsserted(() ->
+            assertThat(completableFuture).isCompletedWithValue("ValueShouldCrossThreadBoundary"));
 
         CircuitBreaker.Metrics metrics = circuitBreaker.getMetrics();
         assertThat(metrics.getNumberOfBufferedCalls()).isEqualTo(3);
@@ -671,7 +804,7 @@ public class DecoratorsTest {
     }
 
     @Test
-    public void testExecuteConsumer() {
+    void executeConsumer() {
         CircuitBreaker circuitBreaker = CircuitBreaker.ofDefaults("helloBackend");
         Decorators.DecorateConsumer<String> decoratedConsumer =
             Decorators.ofConsumer((String input) -> helloWorldService
@@ -683,13 +816,13 @@ public class DecoratorsTest {
         decoratedConsumer.accept("test");
 
         CircuitBreaker.Metrics metrics = circuitBreaker.getMetrics();
-        assertThat(metrics.getNumberOfBufferedCalls()).isEqualTo(1);
-        assertThat(metrics.getNumberOfSuccessfulCalls()).isEqualTo(1);
+        assertThat(metrics.getNumberOfBufferedCalls()).isOne();
+        assertThat(metrics.getNumberOfSuccessfulCalls()).isOne();
         then(helloWorldService).should(times(1)).sayHelloWorldWithName("test");
     }
 
     @Test
-    public void testDecorateFunction() {
+    void decorateFunction() {
         given(helloWorldService.returnHelloWorldWithName("Name")).willReturn("Hello world Name");
         CircuitBreaker circuitBreaker = CircuitBreaker.ofDefaults("helloBackend");
         Function<String, String> decoratedFunction = Decorators
@@ -704,16 +837,29 @@ public class DecoratorsTest {
 
         assertThat(result).isEqualTo("Hello world Name");
         CircuitBreaker.Metrics metrics = circuitBreaker.getMetrics();
-        assertThat(metrics.getNumberOfBufferedCalls()).isEqualTo(1);
-        assertThat(metrics.getNumberOfSuccessfulCalls()).isEqualTo(1);
+        assertThat(metrics.getNumberOfBufferedCalls()).isOne();
+        assertThat(metrics.getNumberOfSuccessfulCalls()).isOne();
     }
 
     @Test
-    public void testDecorateCheckedFunction() throws IOException {
+    void decorateFunctionWithFallback() {
+        given(helloWorldService.returnHelloWorldWithName("Name")).willThrow(new RuntimeException("BAM!"));
+        Function<String, String> decoratedFunction = Decorators
+                .ofFunction(helloWorldService::returnHelloWorldWithName)
+                .withFallback(throwable -> "Fallback")
+                .decorate();
+
+        String result = decoratedFunction.apply("Name");
+
+        assertThat(result).isEqualTo("Fallback");
+    }
+
+    @Test
+    void decorateCheckedFunction() throws Throwable {
         given(helloWorldService.returnHelloWorldWithNameWithException("Name"))
             .willReturn("Hello world Name");
         CircuitBreaker circuitBreaker = CircuitBreaker.ofDefaults("helloBackend");
-        CheckedFunction1<String, String> decoratedFunction = Decorators
+        CheckedFunction<String, String> decoratedFunction = Decorators
             .ofCheckedFunction(helloWorldService::returnHelloWorldWithNameWithException)
             .withCircuitBreaker(circuitBreaker)
             .withRetry(Retry.ofDefaults("id"))
@@ -721,16 +867,50 @@ public class DecoratorsTest {
             .withBulkhead(Bulkhead.ofDefaults("testName"))
             .decorate();
 
-        String result = Try.of(() -> decoratedFunction.apply("Name")).get();
+        String result = decoratedFunction.apply("Name");
 
         assertThat(result).isEqualTo("Hello world Name");
         CircuitBreaker.Metrics metrics = circuitBreaker.getMetrics();
-        assertThat(metrics.getNumberOfBufferedCalls()).isEqualTo(1);
-        assertThat(metrics.getNumberOfSuccessfulCalls()).isEqualTo(1);
+        assertThat(metrics.getNumberOfBufferedCalls()).isOne();
+        assertThat(metrics.getNumberOfSuccessfulCalls()).isOne();
     }
 
     @Test
-    public void testDecoratorBuilderWithRetry() {
+    void decorateCheckedFunctionWithFallback() throws Throwable {
+        given(helloWorldService.returnHelloWorldWithName("Name")).willThrow(new RuntimeException("BAM!"));
+        CheckedFunction<String, String> decoratedFunction = Decorators
+                .ofCheckedFunction(helloWorldService::returnHelloWorldWithName)
+                .withFallback(throwable -> "Fallback")
+                .decorate();
+
+        String result = decoratedFunction.apply("Name");
+
+        assertThat(result).isEqualTo("Fallback");
+    }
+
+    @Test
+    void decorateCheckedConsumer() throws Throwable {
+        given(helloWorldService.returnHelloWorldWithName("Name"))
+            .willReturn("Hello world Name");
+        CircuitBreaker circuitBreaker = CircuitBreaker.ofDefaults("helloBackend");
+        CheckedConsumer<String> decoratedConsumer = Decorators
+            .ofCheckedConsumer(helloWorldService::returnHelloWorldWithName)
+            .withCircuitBreaker(circuitBreaker)
+            .withRetry(Retry.ofDefaults("id"))
+            .withRateLimiter(RateLimiter.ofDefaults("testName"))
+            .withBulkhead(Bulkhead.ofDefaults("testName"))
+            .decorate();
+
+        decoratedConsumer.accept("Name");
+
+        CircuitBreaker.Metrics metrics = circuitBreaker.getMetrics();
+        assertThat(metrics.getNumberOfBufferedCalls()).isOne();
+        assertThat(metrics.getNumberOfSuccessfulCalls()).isOne();
+        then(helloWorldService).should(times(1)).returnHelloWorldWithName("Name");
+    }
+
+    @Test
+    void decoratorBuilderWithRetry() {
         given(helloWorldService.returnHelloWorld()).willThrow(new RuntimeException("BAM!"));
         CircuitBreaker circuitBreaker = CircuitBreaker.ofDefaults("helloBackend");
         Supplier<String> decoratedSupplier = Decorators
@@ -740,7 +920,7 @@ public class DecoratorsTest {
             .withBulkhead(Bulkhead.ofDefaults("testName"))
             .decorate();
 
-        Try.of(decoratedSupplier::get);
+        assertThatThrownBy(decoratedSupplier::get).isInstanceOf(RuntimeException.class);
 
         CircuitBreaker.Metrics metrics = circuitBreaker.getMetrics();
         assertThat(metrics.getNumberOfBufferedCalls()).isEqualTo(3);
@@ -749,7 +929,7 @@ public class DecoratorsTest {
     }
 
     @Test
-    public void testDecoratorBuilderWithRateLimiter() {
+    void decoratorBuilderWithRateLimiter() throws Throwable {
         given(helloWorldService.returnHelloWorld()).willReturn("Hello world");
         RateLimiterConfig config = RateLimiterConfig.custom()
             .timeoutDuration(Duration.ofMillis(100))
@@ -757,18 +937,16 @@ public class DecoratorsTest {
             .limitForPeriod(1)
             .build();
         RateLimiter rateLimiter = RateLimiter.of("backendName", config);
-        CheckedFunction0<String> restrictedSupplier = Decorators
+        CheckedSupplier<String> restrictedSupplier = Decorators
             .ofCheckedSupplier(() -> helloWorldService.returnHelloWorld())
             .withRateLimiter(rateLimiter)
             .decorate();
         alignTime(rateLimiter);
 
-        Try<String> firstTry = Try.of(restrictedSupplier);
-        Try<String> secondTry = Try.of(restrictedSupplier);
+        String firstResult = restrictedSupplier.get();
+        assertThatThrownBy(restrictedSupplier::get).isInstanceOf(RequestNotPermitted.class);
 
-        assertThat(firstTry.isSuccess()).isTrue();
-        assertThat(secondTry.isFailure()).isTrue();
-        assertThat(secondTry.getCause()).isInstanceOf(RequestNotPermitted.class);
+        assertThat(firstResult).isEqualTo("Hello world");
         then(helloWorldService).should(times(1)).returnHelloWorld();
     }
 
@@ -786,24 +964,24 @@ public class DecoratorsTest {
 
     @SuppressWarnings("unchecked")
     @Test
-    public void testDecorateCheckedSupplierWithCache() {
+    void decorateCheckedSupplierWithCache() throws Throwable {
         javax.cache.Cache<String, String> cache = mock(javax.cache.Cache.class);
         given(cache.containsKey("testKey")).willReturn(true);
         given(cache.get("testKey")).willReturn("Hello from cache");
-        CheckedFunction1<String, String> cachedFunction = Decorators
+        CheckedFunction<String, String> cachedFunction = Decorators
             .ofCheckedSupplier(() -> "Hello world")
             .withCache(Cache.of(cache))
             .decorate();
 
-        Try<String> value = Try.of(() -> cachedFunction.apply("testKey"));
+        String value = cachedFunction.apply("testKey");
 
-        assertThat(value).contains("Hello from cache");
+        assertThat(value).isEqualTo("Hello from cache");
     }
 
 
     @SuppressWarnings("unchecked")
     @Test
-    public void testDecorateSupplierWithCache() {
+    void decorateSupplierWithCache() {
         javax.cache.Cache<String, String> cache = mock(javax.cache.Cache.class);
         given(cache.containsKey("testKey")).willReturn(true);
         given(cache.get("testKey")).willReturn("Hello from cache");

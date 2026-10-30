@@ -17,34 +17,37 @@ package io.github.resilience4j.micronaut.ratelimiter;
 
 import io.github.resilience4j.micronaut.BaseInterceptor;
 import io.github.resilience4j.micronaut.ResilienceInterceptPhase;
+import io.github.resilience4j.micronaut.util.PublisherExtension;
 import io.github.resilience4j.ratelimiter.RateLimiter;
+import io.github.resilience4j.ratelimiter.RateLimiterConfig;
 import io.github.resilience4j.ratelimiter.RateLimiterRegistry;
-import io.github.resilience4j.ratelimiter.operator.RateLimiterOperator;
 import io.micronaut.aop.InterceptedMethod;
+import io.micronaut.aop.InterceptorBean;
 import io.micronaut.aop.MethodInterceptor;
 import io.micronaut.aop.MethodInvocationContext;
-import io.micronaut.context.BeanContext;
 import io.micronaut.context.ExecutionHandleLocator;
 import io.micronaut.context.annotation.Requires;
-import io.micronaut.core.annotation.AnnotationValue;
+import io.micronaut.core.convert.ConversionService;
 import io.micronaut.inject.ExecutableMethod;
 import io.micronaut.inject.MethodExecutionHandle;
-import io.reactivex.Flowable;
 
-import javax.inject.Singleton;
 import java.util.Optional;
 import java.util.concurrent.CompletionException;
 
-@Singleton
+@InterceptorBean(io.github.resilience4j.micronaut.annotation.RateLimiter.class)
 @Requires(beans = RateLimiterRegistry.class)
 public class RateLimiterInterceptor extends BaseInterceptor implements MethodInterceptor<Object, Object> {
     private final RateLimiterRegistry rateLimiterRegistry;
     private final ExecutionHandleLocator executionHandleLocator;
+    private final PublisherExtension extension;
 
+    private final ConversionService conversionService;
 
-    public RateLimiterInterceptor(ExecutionHandleLocator executionHandleLocator, RateLimiterRegistry rateLimiterRegistry) {
+    public RateLimiterInterceptor(ExecutionHandleLocator executionHandleLocator, RateLimiterRegistry rateLimiterRegistry, PublisherExtension extension, ConversionService conversionService) {
         this.rateLimiterRegistry = rateLimiterRegistry;
         this.executionHandleLocator = executionHandleLocator;
+        this.extension = extension;
+        this.conversionService = conversionService;
     }
 
     @Override
@@ -68,21 +71,25 @@ public class RateLimiterInterceptor extends BaseInterceptor implements MethodInt
 
     @Override
     public Object intercept(MethodInvocationContext<Object, Object> context) {
-        Optional<AnnotationValue<io.github.resilience4j.micronaut.annotation.RateLimiter>> opt = context.findAnnotation(io.github.resilience4j.micronaut.annotation.RateLimiter.class);
-        if (!opt.isPresent()) {
+        if (!context.hasAnnotation(io.github.resilience4j.micronaut.annotation.RateLimiter.class)) {
             return context.proceed();
         }
         ExecutableMethod executableMethod = context.getExecutableMethod();
         final String name = executableMethod.stringValue(io.github.resilience4j.micronaut.annotation.RateLimiter.class, "name").orElse("default");
-        RateLimiter rateLimiter = this.rateLimiterRegistry.rateLimiter(name);
+        RateLimiterConfig config = rateLimiterRegistry.getConfiguration(name)
+                .orElse(rateLimiterRegistry.getDefaultConfig());
 
-        InterceptedMethod interceptedMethod = InterceptedMethod.of(context);
+        RateLimiter rateLimiter = this.rateLimiterRegistry.rateLimiter(name, config);
+
+        InterceptedMethod interceptedMethod = InterceptedMethod.of(context, conversionService);
         try {
             switch (interceptedMethod.resultType()) {
                 case PUBLISHER:
-                    return interceptedMethod.handleResult(fallbackReactiveTypes(
-                        Flowable.fromPublisher(interceptedMethod.interceptResultAsPublisher()).compose(RateLimiterOperator.of(rateLimiter)),
-                        context));
+                    return interceptedMethod.handleResult(
+                        extension.fallbackPublisher(
+                            extension.rateLimiter(interceptedMethod.interceptResultAsPublisher(), rateLimiter),
+                            context,
+                            this::findFallbackMethod));
                 case COMPLETION_STAGE:
                     return interceptedMethod.handleResult(
                         fallbackForFuture(

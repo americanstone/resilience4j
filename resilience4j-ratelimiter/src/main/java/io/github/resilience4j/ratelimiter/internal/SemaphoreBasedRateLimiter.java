@@ -18,29 +18,30 @@
  */
 package io.github.resilience4j.ratelimiter.internal;
 
+import io.github.resilience4j.core.ExecutorServiceFactory;
 import io.github.resilience4j.core.lang.Nullable;
 import io.github.resilience4j.ratelimiter.RateLimiter;
 import io.github.resilience4j.ratelimiter.RateLimiterConfig;
 import io.github.resilience4j.ratelimiter.event.RateLimiterOnDrainedEvent;
 import io.github.resilience4j.ratelimiter.event.RateLimiterOnFailureEvent;
 import io.github.resilience4j.ratelimiter.event.RateLimiterOnSuccessEvent;
-import io.vavr.collection.HashMap;
-import io.vavr.collection.Map;
-import io.vavr.control.Option;
 
 import java.time.Duration;
+import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.Semaphore;
-import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
+import static java.util.Collections.emptyMap;
 import static java.util.Objects.requireNonNull;
-import static java.util.concurrent.Executors.newSingleThreadScheduledExecutor;
 
 /**
  * A RateLimiter implementation that consists of {@link Semaphore} and scheduler that will refresh
- * permissions after each {@link RateLimiterConfig#getLimitRefreshPeriod()}.
+ * permissions after each {@link RateLimiterConfig#getLimitRefreshPeriod()}, you can invoke
+ * {@link SemaphoreBasedRateLimiter#shutdown()} to close the limiter.
  */
 public class SemaphoreBasedRateLimiter implements RateLimiter {
 
@@ -54,6 +55,7 @@ public class SemaphoreBasedRateLimiter implements RateLimiter {
     private final SemaphoreBasedRateLimiterMetrics metrics;
     private final Map<String, String> tags;
     private final RateLimiterEventProcessor eventProcessor;
+    private final ScheduledFuture<?> scheduledFuture;
 
     /**
      * Creates a RateLimiter.
@@ -62,7 +64,7 @@ public class SemaphoreBasedRateLimiter implements RateLimiter {
      * @param rateLimiterConfig The RateLimiter configuration.
      */
     public SemaphoreBasedRateLimiter(final String name, final RateLimiterConfig rateLimiterConfig) {
-        this(name, rateLimiterConfig, HashMap.empty());
+        this(name, rateLimiterConfig, emptyMap());
     }
 
     /**
@@ -72,8 +74,7 @@ public class SemaphoreBasedRateLimiter implements RateLimiter {
      * @param rateLimiterConfig The RateLimiter configuration.
      * @param tags              tags to assign to the RateLimiter
      */
-    public SemaphoreBasedRateLimiter(final String name, final RateLimiterConfig rateLimiterConfig,
-        Map<String, String> tags) {
+    public SemaphoreBasedRateLimiter(final String name, final RateLimiterConfig rateLimiterConfig, Map<String, String> tags) {
         this(name, rateLimiterConfig, null, tags);
     }
 
@@ -86,7 +87,7 @@ public class SemaphoreBasedRateLimiter implements RateLimiter {
      */
     public SemaphoreBasedRateLimiter(String name, RateLimiterConfig rateLimiterConfig,
         @Nullable ScheduledExecutorService scheduler) {
-        this(name, rateLimiterConfig, scheduler, HashMap.empty());
+        this(name, rateLimiterConfig, scheduler, emptyMap());
     }
 
     /**
@@ -98,32 +99,28 @@ public class SemaphoreBasedRateLimiter implements RateLimiter {
      * @param tags              tags to assign to the RateLimiter
      */
     public SemaphoreBasedRateLimiter(String name, RateLimiterConfig rateLimiterConfig,
-        @Nullable ScheduledExecutorService scheduler, Map<String, String> tags) {
+                                     @Nullable ScheduledExecutorService scheduler, Map<String, String> tags) {
         this.name = requireNonNull(name, NAME_MUST_NOT_BE_NULL);
         this.rateLimiterConfig = new AtomicReference<>(
             requireNonNull(rateLimiterConfig, CONFIG_MUST_NOT_BE_NULL));
 
-        this.scheduler = Option.of(scheduler).getOrElse(this::configureScheduler);
+        this.scheduler = Optional.ofNullable(scheduler).orElseGet(this::configureScheduler);
         this.tags = tags;
         this.semaphore = new Semaphore(this.rateLimiterConfig.get().getLimitForPeriod(), true);
         this.metrics = this.new SemaphoreBasedRateLimiterMetrics();
 
         this.eventProcessor = new RateLimiterEventProcessor();
 
-        scheduleLimitRefresh();
+        this.scheduledFuture = scheduleLimitRefresh();
     }
 
     private ScheduledExecutorService configureScheduler() {
-        ThreadFactory threadFactory = target -> {
-            Thread thread = new Thread(target, "SchedulerForSemaphoreBasedRateLimiterImpl-" + name);
-            thread.setDaemon(true);
-            return thread;
-        };
-        return newSingleThreadScheduledExecutor(threadFactory);
+        return ExecutorServiceFactory.newSingleThreadScheduledExecutor(
+                "SchedulerForSemaphoreBasedRateLimiterImpl-" + name);
     }
 
-    private void scheduleLimitRefresh() {
-        scheduler.scheduleAtFixedRate(
+    private ScheduledFuture<?> scheduleLimitRefresh() {
+        return scheduler.scheduleAtFixedRate(
             this::refreshLimit,
             this.rateLimiterConfig.get().getLimitRefreshPeriod().toNanos(),
             this.rateLimiterConfig.get().getLimitRefreshPeriod().toNanos(),
@@ -134,7 +131,11 @@ public class SemaphoreBasedRateLimiter implements RateLimiter {
     void refreshLimit() {
         int permissionsToRelease =
             this.rateLimiterConfig.get().getLimitForPeriod() - semaphore.availablePermits();
-        semaphore.release(permissionsToRelease);
+        if (permissionsToRelease > 0) {
+            semaphore.release(permissionsToRelease);
+        } else if (permissionsToRelease < 0) {
+            semaphore.tryAcquire(-permissionsToRelease);
+        }
     }
 
     /**
@@ -239,10 +240,10 @@ public class SemaphoreBasedRateLimiter implements RateLimiter {
 
     @Override
     public String toString() {
-        return "SemaphoreBasedRateLimiter{"
-            + "name='" + name + '\''
-            + ", rateLimiterConfig=" + rateLimiterConfig
-            + '}';
+        return "SemaphoreBasedRateLimiter{" +
+            "name='" + name + '\'' +
+            ", rateLimiterConfig=" + rateLimiterConfig +
+            "}";
     }
 
     @Override
@@ -259,6 +260,18 @@ public class SemaphoreBasedRateLimiter implements RateLimiter {
             return;
         }
         eventProcessor.consumeEvent(new RateLimiterOnFailureEvent(name, permits));
+    }
+
+    /**
+     *  Close the scheduled task that refresh permissions if you don't use the {@link  SemaphoreBasedRateLimiter} anymore.
+     *  Otherwise, the {@link SemaphoreBasedRateLimiter} instance will not be garbage collected even if you hold the reference,
+     *  meaning if you create millions of instance, there could be a memory leak.
+     *  (https://github.com/resilience4j/resilience4j/issues/1683)
+     */
+    public void shutdown()  {
+        if (!this.scheduledFuture.isCancelled()) {
+            this.scheduledFuture.cancel(true);
+        }
     }
 
     /**

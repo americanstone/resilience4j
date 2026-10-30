@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright 2016 Robert Winkler
+ *  Copyright 2026 Robert Winkler
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -18,31 +18,48 @@
  */
 package io.github.resilience4j.circuitbreaker.internal;
 
-import com.statemachinesystems.mockclock.MockClock;
-import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
-import io.github.resilience4j.circuitbreaker.CircuitBreaker;
-import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
-import io.github.resilience4j.circuitbreaker.IllegalStateTransitionException;
-import io.github.resilience4j.circuitbreaker.event.*;
-import io.github.resilience4j.core.EventConsumer;
-import io.github.resilience4j.core.IntervalFunction;
-import org.junit.Before;
-import org.junit.Test;
+import static io.github.resilience4j.circuitbreaker.CircuitBreaker.State.CLOSED;
+import static io.github.resilience4j.circuitbreaker.CircuitBreaker.State.DISABLED;
+import static io.github.resilience4j.circuitbreaker.CircuitBreaker.State.FORCED_OPEN;
+import static io.github.resilience4j.circuitbreaker.CircuitBreaker.State.HALF_OPEN;
+import static io.github.resilience4j.circuitbreaker.CircuitBreaker.State.METRICS_ONLY;
+import static io.github.resilience4j.circuitbreaker.CircuitBreaker.State.OPEN;
+import static io.github.resilience4j.circuitbreaker.CircuitBreakerConfig.custom;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatNoException;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.time.ZoneId;
+import java.time.temporal.ChronoUnit;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
-import static io.github.resilience4j.circuitbreaker.CircuitBreaker.State.FORCED_OPEN;
-import static io.github.resilience4j.circuitbreaker.CircuitBreakerConfig.SlidingWindowType;
-import static io.github.resilience4j.circuitbreaker.CircuitBreakerConfig.custom;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.assertj.core.api.BDDAssertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.*;
+import com.statemachinesystems.mockclock.MockClock;
 
-public class CircuitBreakerStateMachineTest {
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
+import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig.SlidingWindowType;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
+import io.github.resilience4j.circuitbreaker.IllegalStateTransitionException;
+import io.github.resilience4j.circuitbreaker.event.CircuitBreakerOnErrorEvent;
+import io.github.resilience4j.circuitbreaker.event.CircuitBreakerOnFailureRateExceededEvent;
+import io.github.resilience4j.circuitbreaker.event.CircuitBreakerOnSlowCallRateExceededEvent;
+import io.github.resilience4j.circuitbreaker.event.CircuitBreakerOnStateTransitionEvent;
+import io.github.resilience4j.circuitbreaker.event.CircuitBreakerOnSuccessEvent;
+import io.github.resilience4j.core.EventConsumer;
+import io.github.resilience4j.core.IntervalFunction;
+
+class CircuitBreakerStateMachineTest {
 
     private CircuitBreaker circuitBreaker;
     private MockClock mockClock;
@@ -52,10 +69,9 @@ public class CircuitBreakerStateMachineTest {
     private EventConsumer<CircuitBreakerOnFailureRateExceededEvent> mockOnFailureRateExceededEventConsumer;
     private EventConsumer<CircuitBreakerOnSlowCallRateExceededEvent> mockOnSlowCallRateExceededEventConsumer;
 
-//    TODO: add tests here for record Result
-
-    @Before
-    public void setUp() {
+    @BeforeEach
+    @SuppressWarnings("unchecked")
+    void setUp() {
         mockOnSuccessEventConsumer = (EventConsumer<CircuitBreakerOnSuccessEvent>) mock(EventConsumer.class);
         mockOnErrorEventConsumer = (EventConsumer<CircuitBreakerOnErrorEvent>) mock(EventConsumer.class);
         mockOnStateTransitionEventConsumer = (EventConsumer<CircuitBreakerOnStateTransitionEvent>) mock(EventConsumer.class);
@@ -68,87 +84,93 @@ public class CircuitBreakerStateMachineTest {
             .slowCallDurationThreshold(Duration.ofSeconds(4))
             .slowCallRateThreshold(50)
             .maxWaitDurationInHalfOpenState(Duration.ofSeconds(1))
-            .slidingWindow(20, 5, SlidingWindowType.TIME_BASED)
+            .slidingWindow(
+                20,
+                5,
+                SlidingWindowType.TIME_BASED,
+                CircuitBreakerConfig.SlidingWindowSynchronizationStrategy.SYNCHRONIZED
+            )
             .waitDurationInOpenState(Duration.ofSeconds(5))
             .ignoreExceptions(NumberFormatException.class)
             .currentTimestampFunction(clock -> clock.instant().toEpochMilli(), TimeUnit.MILLISECONDS)
-            .build(), mockClock);
+            .clock(mockClock)
+            .build());
     }
 
     @Test
-    public void shouldReturnTheCorrectName() {
+    void shouldReturnTheCorrectName() {
         assertThat(circuitBreaker.getName()).isEqualTo("testName");
     }
 
-    @Test()
-    public void shouldThrowCallNotPermittedExceptionWhenStateIsOpen() {
+    @Test
+    void shouldThrowCallNotPermittedExceptionWhenStateIsOpen() {
         circuitBreaker.transitionToOpenState();
         assertThatThrownBy(circuitBreaker::acquirePermission)
             .isInstanceOf(CallNotPermittedException.class);
-        assertThat(circuitBreaker.getMetrics().getNumberOfNotPermittedCalls()).isEqualTo(1);
+        assertThat(circuitBreaker.getMetrics().getNumberOfNotPermittedCalls()).isOne();
     }
 
-    @Test()
-    public void shouldThrowCallNotPermittedExceptionWhenStateIsForcedOpen() {
+    @Test
+    void shouldThrowCallNotPermittedExceptionWhenStateIsForcedOpen() {
         circuitBreaker.transitionToForcedOpenState();
         assertThatThrownBy(circuitBreaker::acquirePermission)
             .isInstanceOf(CallNotPermittedException.class);
-        assertThat(circuitBreaker.getMetrics().getNumberOfNotPermittedCalls()).isEqualTo(1);
+        assertThat(circuitBreaker.getMetrics().getNumberOfNotPermittedCalls()).isOne();
     }
 
-    @Test()
-    public void shouldIncreaseCounterOnReleasePermission() {
+    @Test
+    void shouldIncreaseCounterOnReleasePermission() {
         circuitBreaker.transitionToOpenState();
         circuitBreaker.transitionToHalfOpenState();
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(false);
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(false);
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
+        assertThat(circuitBreaker.tryAcquirePermission()).isFalse();
+        assertThat(circuitBreaker.tryAcquirePermission()).isFalse();
 
         circuitBreaker.releasePermission();
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
     }
 
     @Test
-    public void shouldThrowCallNotPermittedExceptionWhenNotFurtherTestCallsArePermitted() {
+    void shouldThrowCallNotPermittedExceptionWhenNotFurtherTestCallsArePermitted() {
         circuitBreaker.transitionToOpenState();
         circuitBreaker.transitionToHalfOpenState();
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
         assertThatThrownBy(circuitBreaker::acquirePermission)
             .isInstanceOf(CallNotPermittedException.class);
-        assertThat(circuitBreaker.getMetrics().getNumberOfNotPermittedCalls()).isEqualTo(1);
+        assertThat(circuitBreaker.getMetrics().getNumberOfNotPermittedCalls()).isOne();
     }
 
     @Test
-    public void shouldOnlyPermitFourCallsInHalfOpenState() {
+    void shouldOnlyPermitFourCallsInHalfOpenState() {
         assertThatMetricsAreReset();
         circuitBreaker.transitionToOpenState();
         circuitBreaker.transitionToHalfOpenState();
         assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.HALF_OPEN);
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(false);
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(false);
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
+        assertThat(circuitBreaker.tryAcquirePermission()).isFalse();
+        assertThat(circuitBreaker.tryAcquirePermission()).isFalse();
         circuitBreaker.transitionToOpenState();
         circuitBreaker.transitionToHalfOpenState();
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(false);
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(false);
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
+        assertThat(circuitBreaker.tryAcquirePermission()).isFalse();
+        assertThat(circuitBreaker.tryAcquirePermission()).isFalse();
     }
 
 
     @Test
-    public void shouldOpenAfterFailureRateThresholdExceeded2() {
+    void shouldOpenAfterFailureRateThresholdExceeded2() {
         circuitBreaker.onSuccess(0, TimeUnit.NANOSECONDS);
 
         mockClock.advanceBySeconds(1);
@@ -179,37 +201,37 @@ public class CircuitBreakerStateMachineTest {
     }
 
     @Test
-    public void shouldOpenAfterFailureRateThresholdExceeded() {
+    void shouldOpenAfterFailureRateThresholdExceeded() {
         // A ring buffer with size 5 is used in closed state
         // Initially the CircuitBreaker is closed
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
         assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.CLOSED);
         assertThatMetricsAreReset();
         circuitBreaker.getEventPublisher().onFailureRateExceeded(mockOnFailureRateExceededEventConsumer);
 
         // Call 1 is a failure
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
         circuitBreaker.onError(0, TimeUnit.NANOSECONDS,
             new RuntimeException()); // Should create a CircuitBreakerOnErrorEvent
         assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.CLOSED);
         assertCircuitBreakerMetricsEqualTo(-1f, 0, 1, 1, 0L);
 
         // Call 2 is a failure
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
         circuitBreaker.onError(0, TimeUnit.NANOSECONDS,
             new RuntimeException()); // Should create a CircuitBreakerOnErrorEvent
         assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.CLOSED);
         assertCircuitBreakerMetricsEqualTo(-1f, 0, 2, 2, 0L);
 
         // Call 3 is a failure
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
         circuitBreaker.onError(0, TimeUnit.NANOSECONDS,
             new RuntimeException()); // Should create a CircuitBreakerOnErrorEvent
         assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.CLOSED);
         assertCircuitBreakerMetricsEqualTo(-1f, 0, 3, 3, 0L);
 
         // Call 4 is a success
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
         circuitBreaker
             .onSuccess(0, TimeUnit.NANOSECONDS); // Should create a CircuitBreakerOnSuccessEvent
         assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.CLOSED);
@@ -226,39 +248,39 @@ public class CircuitBreakerStateMachineTest {
         assertThat(circuitBreaker.getMetrics().getNumberOfFailedCalls()).isEqualTo(3);
         assertThat(circuitBreaker.getMetrics().getFailureRate()).isEqualTo(60.0f);
         assertCircuitBreakerMetricsEqualTo(60.0f, 2, 5, 3, 0L);
-        verify(mockOnFailureRateExceededEventConsumer, times(1)).consumeEvent(any(CircuitBreakerOnFailureRateExceededEvent.class));
+        verify(mockOnFailureRateExceededEventConsumer).consumeEvent(any(CircuitBreakerOnFailureRateExceededEvent.class));
 
         // Call to tryAcquirePermission records a notPermittedCall
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(false);
+        assertThat(circuitBreaker.tryAcquirePermission()).isFalse();
         assertCircuitBreakerMetricsEqualTo(60.0f, 2, 5, 3, 1L);
     }
 
     @Test
-    public void shouldOpenAfterSlowCallRateThresholdExceeded() {
+    void shouldOpenAfterSlowCallRateThresholdExceeded() {
         // A ring buffer with size 5 is used in closed state
         // Initially the CircuitBreaker is closed
         assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.CLOSED);
         assertThatMetricsAreReset();
 
         // Call 1 is slow
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
         circuitBreaker.onError(5, TimeUnit.SECONDS,
             new RuntimeException()); // Should create a CircuitBreakerOnErrorEvent
         assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.CLOSED);
 
         // Call 2 is slow
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
         circuitBreaker.onSuccess(5, TimeUnit.SECONDS); // Should create a CircuitBreakerOnErrorEvent
         assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.CLOSED);
 
         // Call 3 is fast
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
         circuitBreaker.onError(100, TimeUnit.MILLISECONDS,
             new RuntimeException()); // Should create a CircuitBreakerOnErrorEvent
         assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.CLOSED);
 
         // Call 4 is fast
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
         circuitBreaker
             .onSuccess(100, TimeUnit.MILLISECONDS); // Should create a CircuitBreakerOnSuccessEvent
         assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.CLOSED);
@@ -277,7 +299,7 @@ public class CircuitBreakerStateMachineTest {
     }
 
     @Test
-    public void shouldOpenAfterSlowCallRateThresholdExceededUsingMockClock() {
+    void shouldOpenAfterSlowCallRateThresholdExceededUsingMockClock() {
         // A ring buffer with size 5 is used in closed state
         // Initially the CircuitBreaker is closed
         assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.CLOSED);
@@ -285,8 +307,8 @@ public class CircuitBreakerStateMachineTest {
         Consumer<Integer> consumer = circuitBreaker.decorateConsumer(mockClock::advanceBySeconds);
         // Call 1 is slow
         consumer.accept(5);
-        assertThat(circuitBreaker.getMetrics().getNumberOfBufferedCalls()).isEqualTo(1);
-        assertThat(circuitBreaker.getMetrics().getNumberOfSlowCalls()).isEqualTo(1);
+        assertThat(circuitBreaker.getMetrics().getNumberOfBufferedCalls()).isOne();
+        assertThat(circuitBreaker.getMetrics().getNumberOfSlowCalls()).isOne();
         assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.CLOSED);
 
         // Call 2 is slow
@@ -318,28 +340,28 @@ public class CircuitBreakerStateMachineTest {
     }
 
     @Test
-    public void shouldTransitionToHalfOpenAfterWaitDuration() {
+    void shouldTransitionToHalfOpenAfterWaitDuration() {
         // Initially the CircuitBreaker is open
         circuitBreaker.transitionToOpenState();
         assertThatMetricsAreReset();
 
         assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.OPEN);
         assertThat(circuitBreaker.tryAcquirePermission())
-            .isEqualTo(false); // Should create a CircuitBreakerOnCallNotPermittedEvent
+            .isFalse(); // Should create a CircuitBreakerOnCallNotPermittedEvent
 
         mockClock.advanceBySeconds(3);
 
         // The CircuitBreaker is still open, because the wait duration of 5 seconds is not elapsed.
         assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.OPEN);
         assertThat(circuitBreaker.tryAcquirePermission())
-            .isEqualTo(false); // Should create a CircuitBreakerOnCallNotPermittedEvent
+            .isFalse(); // Should create a CircuitBreakerOnCallNotPermittedEvent
 
         assertCircuitBreakerMetricsEqualTo(-1f, 0, 0, 0, 2L);
 
         mockClock.advanceBySeconds(3);
 
         // The CircuitBreaker switches to half open, because the wait duration of 5 seconds is elapsed.
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
         assertThat(circuitBreaker.getState()).isEqualTo(
             CircuitBreaker.State.HALF_OPEN); // Should create a CircuitBreakerOnStateTransitionEvent (9)
         // Metrics are reset
@@ -347,7 +369,68 @@ public class CircuitBreakerStateMachineTest {
     }
 
     @Test
-    public void shouldTransitionToHalfOpenAfterWaitInterval() {
+    void shouldTransitionToHalfOpenAfterPassedWaitDuration() {
+        // Initially the CircuitBreaker is open
+        circuitBreaker.transitionToOpenStateFor(Duration.ofHours(2));
+        assertThatMetricsAreReset();
+
+        assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.OPEN);
+        assertThat(circuitBreaker.tryAcquirePermission())
+            .isFalse(); // Should create a CircuitBreakerOnCallNotPermittedEvent
+
+        mockClock.advanceByHours(1);
+
+        // The CircuitBreaker is still open, because the wait duration of 2 hours is not elapsed.
+        assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.OPEN);
+        assertThat(circuitBreaker.tryAcquirePermission())
+            .isFalse(); // Should create a CircuitBreakerOnCallNotPermittedEvent
+
+        assertCircuitBreakerMetricsEqualTo(-1f, 0, 0, 0, 2L);
+
+        mockClock.advanceByHours(1);
+        mockClock.advanceBySeconds(1);
+
+        // The CircuitBreaker switches to half open, because the wait duration of 2 hours is elapsed.
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
+        assertThat(circuitBreaker.getState()).isEqualTo(
+            CircuitBreaker.State.HALF_OPEN); // Should create a CircuitBreakerOnStateTransitionEvent (9)
+        // Metrics are reset
+        assertCircuitBreakerMetricsEqualTo(-1f, 0, 0, 0, 0L);
+    }
+
+    @Test
+    void shouldTransitionToHalfOpenAfterPassedWaitUntil() {
+        // Initially the CircuitBreaker is open
+        Instant waitUntil = mockClock.instant().plus(30, ChronoUnit.MINUTES);
+        circuitBreaker.transitionToOpenStateUntil(waitUntil);
+        assertThatMetricsAreReset();
+
+        assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.OPEN);
+        assertThat(circuitBreaker.tryAcquirePermission())
+            .isFalse(); // Should create a CircuitBreakerOnCallNotPermittedEvent
+
+        mockClock.advanceByMinutes(15);
+
+        // The CircuitBreaker is still open, because we did not pass the given point in time
+        assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.OPEN);
+        assertThat(circuitBreaker.tryAcquirePermission())
+            .isFalse(); // Should create a CircuitBreakerOnCallNotPermittedEvent
+
+        assertCircuitBreakerMetricsEqualTo(-1f, 0, 0, 0, 2L);
+
+        mockClock.set(waitUntil);
+        mockClock.advanceBySeconds(1);
+
+        // The CircuitBreaker switches to half open, because we passed the given point in time
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
+        assertThat(circuitBreaker.getState()).isEqualTo(
+            CircuitBreaker.State.HALF_OPEN); // Should create a CircuitBreakerOnStateTransitionEvent (9)
+        // Metrics are reset
+        assertCircuitBreakerMetricsEqualTo(-1f, 0, 0, 0, 0L);
+    }
+
+    @Test
+    void shouldTransitionToHalfOpenAfterWaitInterval() {
         CircuitBreaker intervalCircuitBreaker = new CircuitBreakerStateMachine("testName",
             CircuitBreakerConfig.custom()
                 .failureRateThreshold(50)
@@ -355,7 +438,8 @@ public class CircuitBreakerStateMachineTest {
                 .permittedNumberOfCallsInHalfOpenState(4)
                 .waitIntervalFunctionInOpenState(IntervalFunction.ofExponentialBackoff(5000L))
                 .recordException(error -> !(error instanceof NumberFormatException))
-                .build(), mockClock);
+                .clock(mockClock)
+                .build());
 
         // Initially the CircuitBreaker is open
         intervalCircuitBreaker.transitionToOpenState();
@@ -363,21 +447,21 @@ public class CircuitBreakerStateMachineTest {
 
         assertThat(intervalCircuitBreaker.getState()).isEqualTo(CircuitBreaker.State.OPEN);
         assertThat(intervalCircuitBreaker.tryAcquirePermission())
-            .isEqualTo(false); // Should create a CircuitBreakerOnCallNotPermittedEvent
+            .isFalse(); // Should create a CircuitBreakerOnCallNotPermittedEvent
 
         mockClock.advanceBySeconds(3);
 
         // The CircuitBreaker is still open, because the wait duration of 5 seconds is not elapsed.
         assertThat(intervalCircuitBreaker.getState()).isEqualTo(CircuitBreaker.State.OPEN);
         assertThat(intervalCircuitBreaker.tryAcquirePermission())
-            .isEqualTo(false); // Should create a CircuitBreakerOnCallNotPermittedEvent
+            .isFalse(); // Should create a CircuitBreakerOnCallNotPermittedEvent
 
         assertCircuitBreakerMetricsEqualTo(intervalCircuitBreaker, -1f, 0, 0, 0, 2L);
 
         mockClock.advanceBySeconds(3);
 
         // The CircuitBreaker switches to half open, because the wait duration of 5 seconds is elapsed.
-        assertThat(intervalCircuitBreaker.tryAcquirePermission()).isEqualTo(true);
+        assertThat(intervalCircuitBreaker.tryAcquirePermission()).isTrue();
         assertThat(intervalCircuitBreaker.getState()).isEqualTo(
             CircuitBreaker.State.HALF_OPEN); // Should create a CircuitBreakerOnStateTransitionEvent (9)
         // Metrics are reset
@@ -388,11 +472,11 @@ public class CircuitBreakerStateMachineTest {
         // The CircuitBreaker is still open, because the new wait duration of 7.5 seconds is not elapsed.
         assertThat(intervalCircuitBreaker.getState()).isEqualTo(CircuitBreaker.State.OPEN);
         assertThat(intervalCircuitBreaker.tryAcquirePermission())
-            .isEqualTo(false); // Should create a CircuitBreakerOnCallNotPermittedEvent
+            .isFalse(); // Should create a CircuitBreakerOnCallNotPermittedEvent
 
         mockClock.advanceBySeconds(5);
         // The CircuitBreaker switches to half open, because the new wait duration of 10 seconds is elapsed.
-        assertThat(intervalCircuitBreaker.tryAcquirePermission()).isEqualTo(true);
+        assertThat(intervalCircuitBreaker.tryAcquirePermission()).isTrue();
         assertThat(intervalCircuitBreaker.getState()).isEqualTo(
             CircuitBreaker.State.HALF_OPEN); // Should create a CircuitBreakerOnStateTransitionEvent (9)
         // Metrics are reset
@@ -400,7 +484,7 @@ public class CircuitBreakerStateMachineTest {
     }
 
     @Test
-    public void shouldTransitionBackToOpenStateWhenFailureRateIsAboveThreshold() {
+    void shouldTransitionBackToOpenStateWhenFailureRateIsAboveThreshold() {
         // Initially the CircuitBreaker is half_open
         circuitBreaker.transitionToOpenState();
         circuitBreaker.transitionToHalfOpenState();
@@ -409,20 +493,20 @@ public class CircuitBreakerStateMachineTest {
 
         // A ring buffer with size 3 is used in half open state
         // Call 1 is a failure
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
         circuitBreaker.onError(0, TimeUnit.NANOSECONDS,
             new RuntimeException()); // Should create a CircuitBreakerOnErrorEvent
 
         // Call 2 is a failure
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
         circuitBreaker.onError(0, TimeUnit.NANOSECONDS,
             new RuntimeException()); // Should create a CircuitBreakerOnErrorEvent
         // Call 3 is a success
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
         circuitBreaker.onSuccess(0,
             TimeUnit.NANOSECONDS); // Should create a CircuitBreakerOnSuccessEvent (12)
         // Call 2 is a failure
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
         circuitBreaker.onError(0, TimeUnit.NANOSECONDS,
             new RuntimeException()); // Should create a CircuitBreakerOnErrorEvent
 
@@ -434,26 +518,26 @@ public class CircuitBreakerStateMachineTest {
     }
 
     @Test
-    public void shouldTransitionBackToOpenStateWhenSlowCallRateIsAboveThreshold() {
+    void shouldTransitionBackToOpenStateWhenSlowCallRateIsAboveThreshold() {
         // Initially the CircuitBreaker is half_open
         circuitBreaker.transitionToOpenState();
         circuitBreaker.transitionToHalfOpenState();
         assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.HALF_OPEN);
 
         // Call 1 is slow
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
         circuitBreaker.onSuccess(5, TimeUnit.SECONDS);
 
         // Call 2 is slow
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
         circuitBreaker.onSuccess(5, TimeUnit.SECONDS);
 
         // Call 3 is slow
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
         circuitBreaker.onSuccess(5, TimeUnit.SECONDS);
 
         // Call 4 is fast
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
         circuitBreaker.onSuccess(1, TimeUnit.SECONDS);
 
         // The failure rate is blow 50%, but slow call rate is above 50%
@@ -461,12 +545,12 @@ public class CircuitBreakerStateMachineTest {
         assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.OPEN);
         assertThat(circuitBreaker.getMetrics().getNumberOfSlowCalls()).isEqualTo(3);
         assertThat(circuitBreaker.getMetrics().getSlowCallRate()).isEqualTo(75.0f);
-        assertThat(circuitBreaker.getMetrics().getFailureRate()).isEqualTo(0f);
+        assertThat(circuitBreaker.getMetrics().getFailureRate()).isZero();
     }
 
 
     @Test
-    public void shouldTransitionBackToClosedStateWhenFailureIsBelowThreshold() {
+    void shouldTransitionBackToClosedStateWhenFailureIsBelowThreshold() {
         // Initially the CircuitBreaker is half_open
         circuitBreaker.transitionToOpenState();
         circuitBreaker.transitionToHalfOpenState();
@@ -474,34 +558,34 @@ public class CircuitBreakerStateMachineTest {
         assertCircuitBreakerMetricsEqualTo(-1f, 0, 0, 0, 0L);
 
         // Call 1 is a failure
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
         circuitBreaker.onError(0, TimeUnit.NANOSECONDS,
             new RuntimeException()); // Should create a CircuitBreakerOnErrorEvent
 
         // Call 2 is a success
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
         circuitBreaker
             .onSuccess(0, TimeUnit.NANOSECONDS); // Should create a CircuitBreakerOnSuccessEvent
 
         // Call 3 is a success
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
         circuitBreaker
             .onSuccess(0, TimeUnit.NANOSECONDS); // Should create a CircuitBreakerOnSuccessEvent
 
         // Call 4 is a success
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
         circuitBreaker
             .onSuccess(0, TimeUnit.NANOSECONDS); // Should create a CircuitBreakerOnSuccessEvent
 
         // The ring buffer is filled and the failure rate is below 50%
         // The state machine transitions back to CLOSED state
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
         assertThat(circuitBreaker.getState()).isEqualTo(
             CircuitBreaker.State.CLOSED); // Should create a CircuitBreakerOnStateTransitionEvent
         assertCircuitBreakerMetricsEqualTo(-1f, 0, 0, 0, 0L);
 
         // // Call 5 is a success and fills the buffer in closed state
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
         circuitBreaker
             .onSuccess(0, TimeUnit.NANOSECONDS); // Should create a CircuitBreakerOnSuccessEvent
         assertCircuitBreakerMetricsEqualTo(-1f, 1, 1, 0, 0L);
@@ -509,7 +593,7 @@ public class CircuitBreakerStateMachineTest {
     }
 
     @Test
-    public void shouldResetMetrics() {
+    void shouldResetMetrics() {
         assertThat(circuitBreaker.getState()).isEqualTo(
             CircuitBreaker.State.CLOSED); // Should create a CircuitBreakerOnStateTransitionEvent (21)
         assertThatMetricsAreReset();
@@ -525,7 +609,7 @@ public class CircuitBreakerStateMachineTest {
     }
 
     @Test
-    public void shouldDisableCircuitBreaker() {
+    void shouldDisableCircuitBreaker() {
         circuitBreaker
             .transitionToDisabledState(); // Should create a CircuitBreakerOnStateTransitionEvent
 
@@ -533,19 +617,19 @@ public class CircuitBreakerStateMachineTest {
             CircuitBreaker.State.DISABLED); // Should create a CircuitBreakerOnStateTransitionEvent (21)
         assertThatMetricsAreReset();
 
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
         circuitBreaker
             .onSuccess(0, TimeUnit.NANOSECONDS); // Should not create a CircuitBreakerOnSuccessEvent
 
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
         circuitBreaker.onError(0, TimeUnit.NANOSECONDS,
             new RuntimeException()); // Should not create a CircuitBreakerOnErrorEvent
 
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
         circuitBreaker.onError(0, TimeUnit.NANOSECONDS,
             new RuntimeException()); // Should not create a CircuitBreakerOnErrorEvent
 
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
         circuitBreaker.onError(0, TimeUnit.NANOSECONDS,
             new RuntimeException()); // Should not create a CircuitBreakerOnErrorEvent
 
@@ -557,18 +641,18 @@ public class CircuitBreakerStateMachineTest {
     }
 
     @Test
-    public void shouldForceOpenCircuitBreaker() {
+    void shouldForceOpenCircuitBreaker() {
         circuitBreaker
             .transitionToForcedOpenState(); // Should create a CircuitBreakerOnStateTransitionEvent
 
         assertThat(circuitBreaker.getState()).isEqualTo(
             FORCED_OPEN); // Should create a CircuitBreakerOnStateTransitionEvent
 
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(false);
+        assertThat(circuitBreaker.tryAcquirePermission()).isFalse();
 
         mockClock.advanceBySeconds(6);
 
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(false);
+        assertThat(circuitBreaker.tryAcquirePermission()).isFalse();
 
         // The CircuitBreaker should not transition to half open, even if the wait duration of 5 seconds is elapsed.
 
@@ -578,81 +662,81 @@ public class CircuitBreakerStateMachineTest {
     }
 
     @Test
-    public void shouldReleasePermissionWhenExceptionIgnored() {
+    void shouldReleasePermissionWhenExceptionIgnored() {
         circuitBreaker.transitionToOpenState();
         circuitBreaker.transitionToHalfOpenState();
         assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.HALF_OPEN);
 
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
         circuitBreaker.onSuccess(0, TimeUnit.NANOSECONDS);
         assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.HALF_OPEN);
         assertCircuitBreakerMetricsEqualTo(-1f, 1, 1, 0, 0L);
 
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
         circuitBreaker.onSuccess(0, TimeUnit.NANOSECONDS);
         assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.HALF_OPEN);
         assertCircuitBreakerMetricsEqualTo(-1f, 2, 2, 0, 0L);
 
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
         circuitBreaker.onSuccess(0, TimeUnit.NANOSECONDS); //
         assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.HALF_OPEN);
         assertCircuitBreakerMetricsEqualTo(-1f, 3, 3, 0, 0L);
 
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
         // Should ignore NumberFormatException and release permission
         circuitBreaker.onError(0, TimeUnit.NANOSECONDS, new NumberFormatException());
         assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.HALF_OPEN);
         assertCircuitBreakerMetricsEqualTo(-1f, 3, 3, 0, 0L);
 
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
         circuitBreaker.onError(0, TimeUnit.NANOSECONDS, new RuntimeException());
         assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.CLOSED);
         assertCircuitBreakerMetricsEqualTo(-1f, 0, 0, 0, 0L);
     }
 
     @Test
-    public void shouldIgnoreExceptionsAndThenTransitionToClosed() {
+    void shouldIgnoreExceptionsAndThenTransitionToClosed() {
         circuitBreaker.transitionToOpenState();
         circuitBreaker.transitionToHalfOpenState();
         assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.HALF_OPEN);
 
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
         // Should ignore NumberFormatException and release permission
         circuitBreaker.onError(0, TimeUnit.NANOSECONDS, new NumberFormatException());
         assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.HALF_OPEN);
 
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
         // Should ignore NumberFormatException and release permission
         circuitBreaker.onError(0, TimeUnit.NANOSECONDS, new NumberFormatException());
         assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.HALF_OPEN);
 
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
         // Should ignore NumberFormatException and release permission
         circuitBreaker.onError(0, TimeUnit.NANOSECONDS, new NumberFormatException());
         assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.HALF_OPEN);
 
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
         // Should ignore NumberFormatException and release permission
         circuitBreaker.onError(0, TimeUnit.NANOSECONDS, new NumberFormatException());
         assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.HALF_OPEN);
 
         assertCircuitBreakerMetricsEqualTo(-1f, 0, 0, 0, 0L);
 
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
         circuitBreaker.onSuccess(0, TimeUnit.NANOSECONDS); //
         assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.HALF_OPEN);
 
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
         circuitBreaker.onSuccess(0, TimeUnit.NANOSECONDS); //
         assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.HALF_OPEN);
 
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
         circuitBreaker.onSuccess(0, TimeUnit.NANOSECONDS); //
         assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.HALF_OPEN);
 
         assertCircuitBreakerMetricsEqualTo(-1f, 3, 3, 0, 0L);
 
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
         circuitBreaker.onSuccess(0, TimeUnit.NANOSECONDS); //
         assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.CLOSED);
 
@@ -661,7 +745,7 @@ public class CircuitBreakerStateMachineTest {
 
 
     @Test
-    public void shouldNotAllowTransitionFromClosedToHalfOpen() {
+    void shouldNotAllowTransitionFromClosedToHalfOpen() {
         assertThatThrownBy(() -> circuitBreaker.transitionToHalfOpenState())
             .isInstanceOf(IllegalStateTransitionException.class)
             .hasMessage(
@@ -670,40 +754,40 @@ public class CircuitBreakerStateMachineTest {
     }
 
     @Test
-    public void shouldResetToClosedState() {
+    void shouldResetToClosedState() {
         circuitBreaker.transitionToOpenState();
         circuitBreaker.reset();
         assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.CLOSED);
     }
 
     @Test
-    public void shouldResetClosedState() {
+    void shouldResetClosedState() {
         circuitBreaker.onSuccess(0, TimeUnit.NANOSECONDS);
         circuitBreaker.onSuccess(0, TimeUnit.NANOSECONDS);
         assertThat(circuitBreaker.getMetrics().getNumberOfSuccessfulCalls()).isEqualTo(2);
 
         circuitBreaker.reset();
         assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.CLOSED);
-        assertThat(circuitBreaker.getMetrics().getNumberOfSuccessfulCalls()).isEqualTo(0);
+        assertThat(circuitBreaker.getMetrics().getNumberOfSuccessfulCalls()).isZero();
     }
 
     @Test
-    public void shouldResetMetricsAfterMetricsOnlyStateTransition() {
+    void shouldResetMetricsAfterMetricsOnlyStateTransition() {
         circuitBreaker.onSuccess(0, TimeUnit.NANOSECONDS);
         circuitBreaker.onSuccess(0, TimeUnit.NANOSECONDS);
         assertThat(circuitBreaker.getMetrics().getNumberOfSuccessfulCalls()).isEqualTo(2);
 
         circuitBreaker.transitionToMetricsOnlyState();
         assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.METRICS_ONLY);
-        assertThat(circuitBreaker.getMetrics().getNumberOfSuccessfulCalls()).isEqualTo(0);
+        assertThat(circuitBreaker.getMetrics().getNumberOfSuccessfulCalls()).isZero();
     }
 
     @Test
-    public void shouldRecordMetricsInMetricsOnlyState() {
+    void shouldRecordMetricsInMetricsOnlyState() {
         // A ring buffer with size 5 is used in closed state
         // Initially the CircuitBreaker is closed
         circuitBreaker.transitionToMetricsOnlyState();
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
         assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.METRICS_ONLY);
         assertThatMetricsAreReset();
         circuitBreaker.getEventPublisher().onSuccess(mockOnSuccessEventConsumer);
@@ -712,30 +796,30 @@ public class CircuitBreakerStateMachineTest {
         circuitBreaker.getEventPublisher().onFailureRateExceeded(mockOnFailureRateExceededEventConsumer);
 
         // Call 1 is a failure
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
         circuitBreaker.onError(0, TimeUnit.NANOSECONDS, new RuntimeException());
-        verify(mockOnErrorEventConsumer, times(1)).consumeEvent(any(CircuitBreakerOnErrorEvent.class));
+        verify(mockOnErrorEventConsumer).consumeEvent(any(CircuitBreakerOnErrorEvent.class));
         assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.METRICS_ONLY);
         assertCircuitBreakerMetricsEqualTo(-1f, 0, 1, 1, 0L);
 
         // Call 2 is a failure
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
         circuitBreaker.onError(0, TimeUnit.NANOSECONDS, new RuntimeException());
         verify(mockOnErrorEventConsumer, times(2)).consumeEvent(any(CircuitBreakerOnErrorEvent.class));
         assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.METRICS_ONLY);
         assertCircuitBreakerMetricsEqualTo(-1f, 0, 2, 2, 0L);
 
         // Call 3 is a failure
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
         circuitBreaker.onError(0, TimeUnit.NANOSECONDS, new RuntimeException());
         verify(mockOnErrorEventConsumer, times(3)).consumeEvent(any(CircuitBreakerOnErrorEvent.class));
         assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.METRICS_ONLY);
         assertCircuitBreakerMetricsEqualTo(-1f, 0, 3, 3, 0L);
 
         // Call 4 is a success
-        assertThat(circuitBreaker.tryAcquirePermission()).isEqualTo(true);
+        assertThat(circuitBreaker.tryAcquirePermission()).isTrue();
         circuitBreaker.onSuccess(0, TimeUnit.NANOSECONDS);
-        verify(mockOnSuccessEventConsumer, times(1)).consumeEvent(any(CircuitBreakerOnSuccessEvent.class));
+        verify(mockOnSuccessEventConsumer).consumeEvent(any(CircuitBreakerOnSuccessEvent.class));
         assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.METRICS_ONLY);
         assertCircuitBreakerMetricsEqualTo(-1f, 1, 4, 3, 0L);
 
@@ -746,34 +830,51 @@ public class CircuitBreakerStateMachineTest {
         // The ring buffer is filled and the failure rate is above 50%
         assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.METRICS_ONLY);
         verify(mockOnStateTransitionEventConsumer, never()).consumeEvent(any(CircuitBreakerOnStateTransitionEvent.class));
-        verify(mockOnFailureRateExceededEventConsumer, times(1)).consumeEvent(any(CircuitBreakerOnFailureRateExceededEvent.class));
+        verify(mockOnFailureRateExceededEventConsumer).consumeEvent(any(CircuitBreakerOnFailureRateExceededEvent.class));
         assertThat(circuitBreaker.getMetrics().getNumberOfBufferedCalls()).isEqualTo(5);
         assertThat(circuitBreaker.getMetrics().getNumberOfFailedCalls()).isEqualTo(3);
         assertThat(circuitBreaker.getMetrics().getFailureRate()).isEqualTo(60.0f);
         assertCircuitBreakerMetricsEqualTo(60.0f, 2, 5, 3, 0L);
 
         circuitBreaker.onError(0, TimeUnit.NANOSECONDS, new RuntimeException());
-        verify(mockOnFailureRateExceededEventConsumer, times(1)).consumeEvent(any(CircuitBreakerOnFailureRateExceededEvent.class));
+        verify(mockOnFailureRateExceededEventConsumer).consumeEvent(any(CircuitBreakerOnFailureRateExceededEvent.class));
         verify(mockOnErrorEventConsumer, times(4)).consumeEvent(any(CircuitBreakerOnErrorEvent.class));
         assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.METRICS_ONLY);
     }
 
     @Test
-    public void allCircuitBreakerStatesAllowTransitionToMetricsOnlyMode() {
+    void shouldPublishEachEventOnceInMetricOnlyState() {
+        circuitBreaker.transitionToMetricsOnlyState();
+        circuitBreaker.getEventPublisher().onFailureRateExceeded(mockOnFailureRateExceededEventConsumer);
+        circuitBreaker.getEventPublisher().onSlowCallRateExceeded(mockOnSlowCallRateExceededEventConsumer);
+
+        // trigger FailureRateExceededEvent and SlowCallRateExceededEvent
+        for(int times = 0; times<5; times++) {
+            circuitBreaker.onError(5, TimeUnit.SECONDS, new RuntimeException());
+        }
+
+        verify(mockOnFailureRateExceededEventConsumer)
+            .consumeEvent(any(CircuitBreakerOnFailureRateExceededEvent.class));
+        verify(mockOnSlowCallRateExceededEventConsumer)
+            .consumeEvent(any(CircuitBreakerOnSlowCallRateExceededEvent.class));
+    }
+
+    @Test
+    void allCircuitBreakerStatesAllowTransitionToMetricsOnlyMode() {
         for (final CircuitBreaker.State state : CircuitBreaker.State.values()) {
-            CircuitBreaker.StateTransition.transitionBetween(circuitBreaker.getName(), state, CircuitBreaker.State.METRICS_ONLY);
+            assertThatNoException().isThrownBy(() -> CircuitBreaker.StateTransition.transitionBetween(circuitBreaker.getName(), state, CircuitBreaker.State.METRICS_ONLY));
         }
     }
 
     @Test
-    public void allCircuitBreakerStatesAllowTransitionToItsOwnState() {
+    void allCircuitBreakerStatesAllowTransitionToItsOwnState() {
         for (final CircuitBreaker.State state : CircuitBreaker.State.values()) {
-            CircuitBreaker.StateTransition.transitionBetween(circuitBreaker.getName(), state, state);
+            assertThatNoException().isThrownBy(() -> CircuitBreaker.StateTransition.transitionBetween(circuitBreaker.getName(), state, state));
         }
     }
 
     @Test
-    public void circuitBreakerDoesNotPublishStateTransitionEventsForInternalTransitions() {
+    void circuitBreakerDoesNotPublishStateTransitionEventsForInternalTransitions() {
         circuitBreaker.getEventPublisher().onStateTransition(mockOnStateTransitionEventConsumer);
         int expectedNumberOfStateTransitions = 0;
 
@@ -809,7 +910,7 @@ public class CircuitBreakerStateMachineTest {
     }
 
     @Test
-    public void circuitBreakerTransitionsToOpenAfterWaitDurationInHalfOpenState() throws InterruptedException {
+    void circuitBreakerTransitionsToOpenAfterWaitDurationInHalfOpenState() throws Exception {
         circuitBreaker.transitionToOpenState();
         // Initially the CircuitBreaker is in Half Open State
         circuitBreaker.transitionToHalfOpenState();
@@ -818,6 +919,77 @@ public class CircuitBreakerStateMachineTest {
         Thread.sleep(2000l);
         assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.OPEN);
     }
+
+    @Test
+    void circuitBreakerTransitionsToClosedAfterWaitDurationInHalfOpenState() throws Exception {
+        circuitBreaker = new CircuitBreakerStateMachine("testName", custom()
+            .maxWaitDurationInHalfOpenState(Duration.ofSeconds(1))
+            .transitionToStateAfterWaitDuration(CircuitBreaker.State.CLOSED)
+            .build());
+        circuitBreaker.transitionToOpenState();
+        // Initially the CircuitBreaker is in Half Open State
+        circuitBreaker.transitionToHalfOpenState();
+        assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.HALF_OPEN);
+        // sleeping for maxWaitDurationInHalfOpenState to expire (maxWaitDurationInHalfOpenState = 1Sec)
+        Thread.sleep(2000l);
+        assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.CLOSED);
+    }
+
+    @Test
+    void circuitBreakerInitializeInClosedState(){
+        CircuitBreaker intervalCircuitBreaker = new CircuitBreakerStateMachine("testName",
+                CircuitBreakerConfig.custom()
+                        .initialState(CLOSED)
+                        .failureRateThreshold(50)
+                        .slidingWindowSize(5)
+                        .permittedNumberOfCallsInHalfOpenState(4)
+                        .waitIntervalFunctionInOpenState(IntervalFunction.ofExponentialBackoff(5000L))
+                        .recordException(error -> !(error instanceof NumberFormatException))
+                        .clock(mockClock)
+                        .build());
+
+        assertThat(intervalCircuitBreaker.getState()).isEqualTo(CLOSED);
+
+        intervalCircuitBreaker.transitionToOpenState();
+        assertThat(intervalCircuitBreaker.getState()).isEqualTo(OPEN);
+    }
+
+    @Test
+    void circuitBreakerInitializeInOpenState() throws Exception {
+        CircuitBreaker intervalCircuitBreaker = new CircuitBreakerStateMachine("testName",
+                CircuitBreakerConfig.custom()
+                        .initialState(OPEN)
+                        .failureRateThreshold(50)
+                        .slidingWindowSize(1)
+                        .slidingWindowType(SlidingWindowType.TIME_BASED)
+                        .permittedNumberOfCallsInHalfOpenState(4)
+                        .waitDurationInOpenState(Duration.ofSeconds(2))
+                        .automaticTransitionFromOpenToHalfOpenEnabled(true)
+                        .clock(mockClock)
+                        .build());
+
+        assertThat(intervalCircuitBreaker.getState()).isEqualTo(OPEN);
+        intervalCircuitBreaker.transitionToHalfOpenState();
+        assertThat(intervalCircuitBreaker.getState()).isEqualTo(HALF_OPEN);
+    }
+
+    @Test
+    void circuitBreakerInitializeInMetricOnlyState(){
+        CircuitBreaker intervalCircuitBreaker = new CircuitBreakerStateMachine("testName",
+                CircuitBreakerConfig.custom()
+                        .initialState(METRICS_ONLY)
+                        .failureRateThreshold(50)
+                        .slidingWindowSize(5)
+                        .permittedNumberOfCallsInHalfOpenState(4)
+                        .waitIntervalFunctionInOpenState(IntervalFunction.ofExponentialBackoff(5000L))
+                        .recordException(error -> !(error instanceof NumberFormatException))
+                        .clock(mockClock)
+                        .build());
+
+        assertThat(intervalCircuitBreaker.getState()).isEqualTo(METRICS_ONLY);
+    }
+
+
 
     private void assertCircuitBreakerMetricsEqualTo(Float expectedFailureRate,
         Integer expectedSuccessCalls, Integer expectedBufferedCalls, Integer expectedFailedCalls,

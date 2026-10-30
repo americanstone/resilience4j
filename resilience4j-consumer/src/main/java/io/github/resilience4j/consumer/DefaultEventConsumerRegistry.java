@@ -15,9 +15,7 @@
  */
 package io.github.resilience4j.consumer;
 
-import io.vavr.collection.Array;
-import io.vavr.collection.Seq;
-
+import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
@@ -32,6 +30,7 @@ public class DefaultEventConsumerRegistry<T> implements EventConsumerRegistry<T>
      * The constructor with default circuitBreaker properties.
      */
     public DefaultEventConsumerRegistry() {
+        // Using ConcurrentHashMap for virtual thread optimization - simple registry operations don't require FutureHashMap pattern
         this.registry = new ConcurrentHashMap<>();
     }
 
@@ -43,12 +42,16 @@ public class DefaultEventConsumerRegistry<T> implements EventConsumerRegistry<T>
     }
 
     @Override
+    public CircularEventConsumer<T> removeEventConsumer(String id) {
+        return registry.remove(id);
+    }
+    @Override
     public CircularEventConsumer<T> getEventConsumer(String id) {
         return registry.get(id);
     }
 
     @Override
-    public Seq<CircularEventConsumer<T>> getAllEventConsumer() {
-        return Array.ofAll(registry.values());
+    public List<CircularEventConsumer<T>> getAllEventConsumer() {
+        return List.copyOf(registry.values());
     }
 }

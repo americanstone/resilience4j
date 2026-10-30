@@ -30,12 +30,14 @@ import io.github.resilience4j.core.ContextPropagator;
 import io.github.resilience4j.core.EventConsumer;
 import io.github.resilience4j.core.EventProcessor;
 import io.github.resilience4j.core.lang.Nullable;
-import io.vavr.collection.HashMap;
-import io.vavr.collection.Map;
+import io.github.resilience4j.core.ExecutorServiceFactory;
+import io.github.resilience4j.core.ThreadType;
 
+import java.util.Map;
 import java.util.concurrent.*;
 import java.util.function.Supplier;
 
+import static java.util.Collections.emptyMap;
 import static java.util.Objects.requireNonNull;
 
 /**
@@ -63,7 +65,7 @@ public class FixedThreadPoolBulkhead implements ThreadPoolBulkhead {
      * @param bulkheadConfig custom bulkhead configuration
      */
     public FixedThreadPoolBulkhead(String name, @Nullable ThreadPoolBulkheadConfig bulkheadConfig) {
-        this(name, bulkheadConfig, HashMap.empty());
+        this(name, bulkheadConfig, emptyMap());
     }
 
     /**
@@ -79,11 +81,15 @@ public class FixedThreadPoolBulkhead implements ThreadPoolBulkhead {
         this.config = requireNonNull(bulkheadConfig, CONFIG_MUST_NOT_BE_NULL);
         this.tags = requireNonNull(tags, TAGS_MUST_NOTE_BE_NULL);
         // init thread pool executor
+        ThreadFactory threadFactory = ExecutorServiceFactory.getThreadType() == ThreadType.VIRTUAL
+            ? Thread.ofVirtual().name(String.join("-", "bulkhead", name, "v-"), 0).factory()
+            : new BulkheadNamingThreadFactory(name);
+
         this.executorService = new ThreadPoolExecutor(config.getCoreThreadPoolSize(),
             config.getMaxThreadPoolSize(),
             config.getKeepAliveDuration().toMillis(), TimeUnit.MILLISECONDS,
-            new ArrayBlockingQueue<>(config.getQueueCapacity()),
-            new BulkheadNamingThreadFactory(name),
+            config.getQueueCapacity() == 0 ? new SynchronousQueue<>() : new ArrayBlockingQueue<>(config.getQueueCapacity()),
+            threadFactory,
             config.getRejectedExecutionHandler());
         // adding prover jvm executor shutdown
         this.metrics = new FixedThreadPoolBulkhead.BulkheadMetrics();
@@ -96,7 +102,7 @@ public class FixedThreadPoolBulkhead implements ThreadPoolBulkhead {
      * @param name the name of this bulkhead
      */
     public FixedThreadPoolBulkhead(String name) {
-        this(name, ThreadPoolBulkheadConfig.ofDefaults(), HashMap.empty());
+        this(name, ThreadPoolBulkheadConfig.ofDefaults(), emptyMap());
     }
 
     /**
@@ -115,7 +121,7 @@ public class FixedThreadPoolBulkhead implements ThreadPoolBulkhead {
      * @param configSupplier BulkheadConfig supplier
      */
     public FixedThreadPoolBulkhead(String name, Supplier<ThreadPoolBulkheadConfig> configSupplier) {
-        this(name, configSupplier.get(), HashMap.empty());
+        this(name, configSupplier.get(), emptyMap());
     }
 
     /**
@@ -324,6 +330,16 @@ public class FixedThreadPoolBulkhead implements ThreadPoolBulkhead {
         @Override
         public int getQueueCapacity() {
             return config.getQueueCapacity();
+        }
+
+        @Override
+        public int getActiveThreadCount() {
+            return executorService.getActiveCount();
+        }
+
+        @Override
+        public int getAvailableThreadCount() {
+            return getMaximumThreadPoolSize() - getActiveThreadCount();
         }
     }
 }

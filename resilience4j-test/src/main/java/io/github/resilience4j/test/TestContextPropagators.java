@@ -29,6 +29,8 @@ import java.util.function.Supplier;
 
 public class TestContextPropagators {
 
+    private TestContextPropagators(){}
+
     public static class TestThreadLocalContextPropagator implements ContextPropagator<String> {
         private ThreadLocal<String> threadLocal;
 
@@ -45,7 +47,6 @@ public class TestContextPropagators {
         public Consumer<Optional<String>> copy() {
             return (t) -> t.ifPresent(e -> {
                 if (threadLocal.get() != null) {
-                    threadLocal.set(null);
                     threadLocal.remove();
                 }
                 threadLocal.set(e);
@@ -56,7 +57,6 @@ public class TestContextPropagators {
         public Consumer<Optional<String>> clear() {
             return (t) -> {
                 if (threadLocal.get() != null) {
-                    threadLocal.set(null);
                     threadLocal.remove();
                 }
             };
@@ -66,6 +66,7 @@ public class TestContextPropagators {
     public static class TestThreadLocalContextPropagatorWithHolder<T> implements ContextPropagator<T> {
 
         @Override
+        @SuppressWarnings("unchecked")
         public Supplier<Optional<T>> retrieve() {
             return () -> (Optional<T>) TestThreadLocalContextHolder.get();
         }
@@ -102,7 +103,6 @@ public class TestContextPropagators {
 
             public static void clear() {
                 if (threadLocal.get() != null) {
-                    threadLocal.set(null);
                     threadLocal.remove();
                 }
             }

@@ -24,8 +24,8 @@ import io.github.resilience4j.bulkhead.event.BulkheadOnCallPermittedEvent;
 import io.github.resilience4j.bulkhead.event.BulkheadOnCallRejectedEvent;
 import io.github.resilience4j.bulkhead.internal.FixedThreadPoolBulkhead;
 import io.github.resilience4j.core.EventConsumer;
-import io.vavr.collection.Map;
 
+import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Supplier;
@@ -39,13 +39,12 @@ public interface ThreadPoolBulkhead extends AutoCloseable {
      * Returns a supplier which submits a value-returning task for execution and
      * returns a {@link CompletionStage} representing the pending results of the task.
      *
-     * The Supplier throws a {@link BulkheadFullException} if the task cannot be submitted, because the Bulkhead is full.
-     *
      * @param bulkhead the bulkhead
      * @param callable the value-returning task to submit
      * @param <T>      the result type of the callable
      * @return a supplier which submits a value-returning task for execution and returns a CompletionStage representing the pending
      * results of the task
+     * @throws BulkheadFullException if the task cannot be submitted because the Bulkhead is full
      */
     static <T> Supplier<CompletionStage<T>> decorateCallable(ThreadPoolBulkhead bulkhead,
         Callable<T> callable) {
@@ -56,13 +55,12 @@ public interface ThreadPoolBulkhead extends AutoCloseable {
      * Returns a supplier which submits a value-returning task for execution
      * and returns a {@link CompletionStage} representing the pending results of the task.
      *
-     * The Supplier throws a {@link BulkheadFullException} if the task cannot be submitted, because the Bulkhead is full.
-     *
      * @param bulkhead the bulkhead
      * @param supplier the value-returning task to submit
      * @param <T>      the result type of the supplier
      * @return a supplier which submits a value-returning task for execution and returns a CompletionStage representing the pending
      * results of the task
+     * @throws BulkheadFullException if the task cannot be submitted because the Bulkhead is full
      */
     static <T> Supplier<CompletionStage<T>> decorateSupplier(ThreadPoolBulkhead bulkhead,
         Supplier<T> supplier) {
@@ -72,12 +70,11 @@ public interface ThreadPoolBulkhead extends AutoCloseable {
     /**
      * Returns a supplier which submits a task for execution and returns a {@link CompletionStage} representing the state of the task.
      *
-     * The Supplier throws a {@link BulkheadFullException} if the task cannot be submitted, because the Bulkhead is full.
-     *
      * @param bulkhead the bulkhead
      * @param runnable the to submit
      * @return a supplier which submits a task for execution to the ThreadPoolBulkhead
      * and returns a CompletionStage representing the state of the task
+     * @throws BulkheadFullException if the task cannot be submitted because the Bulkhead is full
      */
     static Supplier<CompletionStage<Void>> decorateRunnable(ThreadPoolBulkhead bulkhead, Runnable runnable) {
         return () -> bulkhead.submit(runnable);
@@ -111,8 +108,7 @@ public interface ThreadPoolBulkhead extends AutoCloseable {
      * @param config a custom BulkheadConfig configuration
      * @return a Bulkhead instance
      */
-    static ThreadPoolBulkhead of(String name, ThreadPoolBulkheadConfig config,
-        io.vavr.collection.Map<String, String> tags) {
+    static ThreadPoolBulkhead of(String name, ThreadPoolBulkheadConfig config, Map<String, String> tags) {
         return new FixedThreadPoolBulkhead(name, config, tags);
     }
 
@@ -191,12 +187,11 @@ public interface ThreadPoolBulkhead extends AutoCloseable {
      * Returns a supplier which submits a value-returning task for execution and
      * returns a CompletionStage representing the asynchronous computation of the task.
      *
-     * The Supplier throws a {@link BulkheadFullException} if the task cannot be submitted, because the Bulkhead is full.
-     *
      * @param supplier the value-returning task to submit
      * @param <T>      the result type of the callable
      * @return a supplier which submits a value-returning task for execution and returns a CompletionStage representing
      * the asynchronous computation of the task
+     * @throws BulkheadFullException if the task cannot be submitted because the Bulkhead is full
      */
     default <T> Supplier<CompletionStage<T>> decorateSupplier(Supplier<T> supplier) {
         return decorateSupplier(this, supplier);
@@ -206,12 +201,11 @@ public interface ThreadPoolBulkhead extends AutoCloseable {
      * Returns a supplier which submits a value-returning task for execution and
      * returns a CompletionStage representing the asynchronous computation of the task.
      *
-     * The Supplier throws a {@link BulkheadFullException} if the task cannot be submitted, because the Bulkhead is full.
-     *
      * @param callable the value-returning task to submit
      * @param <T>      the result type of the callable
      * @return a supplier which submits a value-returning task for execution and returns a CompletionStage representing
      * the asynchronous computation of the task
+     * @throws BulkheadFullException if the task cannot be submitted because the Bulkhead is full
      */
     default <T> Supplier<CompletionStage<T>> decorateCallable(Callable<T> callable) {
         return decorateCallable(this, callable);
@@ -221,11 +215,10 @@ public interface ThreadPoolBulkhead extends AutoCloseable {
      * Returns a supplier which submits a task for execution and returns a {@link CompletionStage} representing the
      * asynchronous computation of the task.
      *
-     * The Supplier throws a {@link BulkheadFullException} if the task cannot be submitted, because the Bulkhead is full.
-     *
      * @param runnable the task to submit
      * @return a supplier which submits a task for execution and returns a CompletionStage representing
      * the asynchronous computation of the task
+     * @throws BulkheadFullException if the task cannot be submitted because the Bulkhead is full
      */
     default Supplier<CompletionStage<Void>> decorateRunnable(Runnable runnable) {
         return decorateRunnable(this, runnable);
@@ -312,6 +305,21 @@ public interface ThreadPoolBulkhead extends AutoCloseable {
          * @return the queue capacity
          */
         int getQueueCapacity();
+
+        /**
+         * Returns the number of actively executing tasks.
+         *
+         * @return the number of executing tasks
+         */
+        int getActiveThreadCount();
+
+        /**
+         * Returns the maximum number of available threads.
+         * Equivalent to <code>getMaximumThreadPoolSize() - getActiveThreadCount()</code>
+         *
+         * @return the maximum number of available threads
+         */
+        int getAvailableThreadCount();
     }
 
     /**

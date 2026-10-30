@@ -21,6 +21,7 @@ package io.github.resilience4j.core.metrics;
 
 import java.time.Clock;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * A {@link Metrics} implementation is backed by a sliding time window that aggregates only the
@@ -34,14 +35,14 @@ import java.util.concurrent.TimeUnit;
  * the previous {@code N-1} epoch seconds.
  * <p>
  * The sliding window does not store call outcomes (tuples) individually, but incrementally updates
- * partial aggregations (bucket) and a total aggregation. The total total aggregation is updated
+ * partial aggregations (bucket) and a total aggregation. The total aggregation is updated
  * incrementally when a new call outcome is recorded. When the oldest bucket is evicted, the partial
  * total aggregation of that bucket is subtracted from the total aggregation. (Subtract-on-Evict)
  * <p>
  * The time to retrieve a Snapshot is constant 0(1), since the Snapshot is pre-aggregated and is
  * independent of the time window size. The space requirement (memory consumption) of this
  * implementation should be nearly constant O(n), since the call outcomes (tuples) are not stored
- * individually. Only {@code N} partial aggregations and 1 total total aggregation are created.
+ * individually. Only {@code N} partial aggregations and 1 total aggregation are created.
  */
 public class SlidingTimeWindowMetrics implements Metrics {
 
@@ -50,6 +51,8 @@ public class SlidingTimeWindowMetrics implements Metrics {
     private final TotalAggregation totalAggregation;
     private final Clock clock;
     int headIndex;
+
+    private final ReentrantLock lock = new ReentrantLock();
 
     /**
      * Creates a new {@link SlidingTimeWindowMetrics} with the given clock and window of time.
@@ -71,16 +74,28 @@ public class SlidingTimeWindowMetrics implements Metrics {
     }
 
     @Override
-    public synchronized Snapshot record(long duration, TimeUnit durationUnit, Outcome outcome) {
-        totalAggregation.record(duration, durationUnit, outcome);
-        moveWindowToCurrentEpochSecond(getLatestPartialAggregation())
-            .record(duration, durationUnit, outcome);
-        return new SnapshotImpl(totalAggregation);
+    public Snapshot record(long duration, TimeUnit durationUnit, Outcome outcome) {
+        lock.lock();
+
+        try {
+            totalAggregation.record(duration, durationUnit, outcome);
+            moveWindowToCurrentEpochSecond(getLatestPartialAggregation())
+                    .record(duration, durationUnit, outcome);
+            return new SnapshotImpl(totalAggregation);
+        } finally {
+            lock.unlock();
+        }
     }
 
-    public synchronized Snapshot getSnapshot() {
-        moveWindowToCurrentEpochSecond(getLatestPartialAggregation());
-        return new SnapshotImpl(totalAggregation);
+    public Snapshot getSnapshot() {
+        lock.lock();
+
+        try {
+            moveWindowToCurrentEpochSecond(getLatestPartialAggregation());
+            return new SnapshotImpl(totalAggregation);
+        } finally {
+            lock.unlock();
+        }
     }
 
     /**

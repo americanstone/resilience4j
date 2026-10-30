@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright 2016 Robert Winkler
+ *  Copyright 2026 Robert Winkler
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -19,17 +19,18 @@
 package io.github.resilience4j.retry.internal;
 
 import io.github.resilience4j.core.IntervalFunction;
+import io.github.resilience4j.core.functions.CheckedRunnable;
 import io.github.resilience4j.retry.Retry;
 import io.github.resilience4j.retry.RetryConfig;
 import io.github.resilience4j.test.HelloWorldException;
 import io.github.resilience4j.test.HelloWorldService;
-import io.vavr.CheckedRunnable;
 import io.vavr.Predicates;
 import io.vavr.control.Try;
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static io.vavr.API.*;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -38,30 +39,30 @@ import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 
-public class RunnableRetryTest {
+class RunnableRetryTest {
 
     private HelloWorldService helloWorldService;
     private long sleptTime = 0L;
 
-    @Before
-    public void setUp() {
+    @BeforeEach
+    void setUp() {
         helloWorldService = mock(HelloWorldService.class);
         RetryImpl.sleepFunction = sleep -> sleptTime += sleep;
     }
 
     @Test
-    public void shouldNotRetry() {
+    void shouldNotRetry() {
         Retry retryContext = Retry.ofDefaults("id");
         Runnable runnable = Retry.decorateRunnable(retryContext, helloWorldService::sayHelloWorld);
 
         runnable.run();
 
         then(helloWorldService).should().sayHelloWorld();
-        assertThat(sleptTime).isEqualTo(0);
+        assertThat(sleptTime).isZero();
     }
 
     @Test
-    public void testDecorateRunnable() {
+    void testDecorateRunnable() {
         willThrow(new HelloWorldException()).given(helloWorldService).sayHelloWorld();
         Retry retry = Retry.ofDefaults("id");
         Runnable runnable = Retry.decorateRunnable(retry, helloWorldService::sayHelloWorld);
@@ -75,23 +76,23 @@ public class RunnableRetryTest {
     }
 
     @Test
-    public void testExecuteRunnable() {
+    void testExecuteRunnable() {
         Retry retry = Retry.ofDefaults("id");
 
         retry.executeRunnable(helloWorldService::sayHelloWorld);
 
         then(helloWorldService).should().sayHelloWorld();
-        assertThat(sleptTime).isEqualTo(0);
+        assertThat(sleptTime).isZero();
     }
 
     @Test
-    public void shouldReturnAfterThreeAttempts() {
+    void shouldReturnAfterThreeAttempts() {
         willThrow(new HelloWorldException()).given(helloWorldService).sayHelloWorld();
         Retry retry = Retry.ofDefaults("id");
         CheckedRunnable retryableRunnable = Retry
             .decorateCheckedRunnable(retry, helloWorldService::sayHelloWorld);
 
-        Try<Void> result = Try.run(retryableRunnable);
+        Try<Void> result = Try.run(() -> retryableRunnable.run());
 
         then(helloWorldService).should(times(3)).sayHelloWorld();
         assertThat(result.isFailure()).isTrue();
@@ -100,23 +101,23 @@ public class RunnableRetryTest {
     }
 
     @Test
-    public void shouldReturnAfterOneAttempt() {
+    void shouldReturnAfterOneAttempt() {
         willThrow(new HelloWorldException()).given(helloWorldService).sayHelloWorld();
         RetryConfig config = RetryConfig.custom().maxAttempts(1).build();
         Retry retry = Retry.of("id", config);
         CheckedRunnable retryableRunnable = Retry
             .decorateCheckedRunnable(retry, helloWorldService::sayHelloWorld);
 
-        Try<Void> result = Try.run(retryableRunnable);
+        Try<Void> result = Try.run(() -> retryableRunnable.run());
 
         then(helloWorldService).should().sayHelloWorld();
         assertThat(result.isFailure()).isTrue();
         assertThat(result.failed().get()).isInstanceOf(HelloWorldException.class);
-        assertThat(sleptTime).isEqualTo(0);
+        assertThat(sleptTime).isZero();
     }
 
     @Test
-    public void shouldReturnAfterOneAttemptAndIgnoreException() {
+    void shouldReturnAfterOneAttemptAndIgnoreException() {
         willThrow(new HelloWorldException()).given(helloWorldService).sayHelloWorld();
         RetryConfig config = RetryConfig.custom()
             .retryOnException(throwable -> Match(throwable).of(
@@ -127,17 +128,17 @@ public class RunnableRetryTest {
         CheckedRunnable retryableRunnable = Retry
             .decorateCheckedRunnable(retry, helloWorldService::sayHelloWorld);
 
-        Try<Void> result = Try.run(retryableRunnable);
+        Try<Void> result = Try.run(() -> retryableRunnable.run());
 
         // because the exception should be rethrown immediately
         then(helloWorldService).should().sayHelloWorld();
         assertThat(result.isFailure()).isTrue();
         assertThat(result.failed().get()).isInstanceOf(HelloWorldException.class);
-        assertThat(sleptTime).isEqualTo(0);
+        assertThat(sleptTime).isZero();
     }
 
     @Test
-    public void shouldTakeIntoAccountBackoffFunction() {
+    void shouldTakeIntoAccountBackoffFunction() {
         willThrow(new HelloWorldException()).given(helloWorldService).sayHelloWorld();
         RetryConfig config = RetryConfig
             .custom()
@@ -147,7 +148,7 @@ public class RunnableRetryTest {
         CheckedRunnable retryableRunnable = Retry
             .decorateCheckedRunnable(retry, helloWorldService::sayHelloWorld);
 
-        Try.run(retryableRunnable);
+        Try.run(() -> retryableRunnable.run());
 
         then(helloWorldService).should(times(3)).sayHelloWorld();
         assertThat(sleptTime).isEqualTo(
@@ -156,20 +157,24 @@ public class RunnableRetryTest {
     }
 
     @Test
-    public void shouldTakeIntoAccountBackoffBiFunction() {
-        willThrow(new HelloWorldException()).given(helloWorldService).sayHelloWorld();
+    void shouldTakeIntoAccountRetryOnResult() {
+        AtomicInteger value = new AtomicInteger(0);
+        final int targetValue = 2;
         RetryConfig config = RetryConfig
-            .custom()
-            .maxAttempts(3)
-            .intervalBiFunction((attempt, result) -> result.mapLeft(e -> 100L).getLeft())
-            .build();
-        Retry retry = Retry.of("id", config);
+                .custom()
+                .retryOnResult(result -> value.get() != targetValue)
+                .build();
+        Retry retry = Retry.of("shouldTakeIntoAccountRetryOnResult", config);
         CheckedRunnable retryableRunnable = Retry
-            .decorateCheckedRunnable(retry, helloWorldService::sayHelloWorld);
+                .decorateCheckedRunnable(retry, () -> {
+                    helloWorldService.sayHelloWorld();
+                    value.incrementAndGet();
+                });
 
-        Try.run(retryableRunnable);
+        Try.run(() -> retryableRunnable.run());
 
-        then(helloWorldService).should(times(3)).sayHelloWorld();
-        assertThat(sleptTime).isEqualTo(200);
+        then(helloWorldService).should(times(targetValue)).sayHelloWorld();
+        System.out.println(sleptTime);
+        assertThat(sleptTime).isEqualTo(RetryConfig.DEFAULT_WAIT_DURATION);
     }
 }

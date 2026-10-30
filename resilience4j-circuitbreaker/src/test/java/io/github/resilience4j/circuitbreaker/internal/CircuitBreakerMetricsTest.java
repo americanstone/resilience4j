@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright 2016 Robert Winkler
+ *  Copyright 2026 Robert Winkler
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -19,27 +19,43 @@
 package io.github.resilience4j.circuitbreaker.internal;
 
 import com.statemachinesystems.mockclock.MockClock;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig.SlidingWindowSynchronizationStrategy;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
-import org.junit.Test;
+
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
+
 
 import java.time.ZoneId;
+
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Stream;
 
 import static io.github.resilience4j.circuitbreaker.internal.CircuitBreakerMetrics.Result;
 import static org.assertj.core.api.Assertions.assertThat;
 
-public class CircuitBreakerMetricsTest {
 
-//    TODO: add tests here for record Result
+class CircuitBreakerMetricsTest {
 
-    @Test
-    public void testCircuitBreakerMetrics() {
+    private static Stream<SlidingWindowSynchronizationStrategy> slidingWindowConfig() {
+        return Stream.of(SlidingWindowSynchronizationStrategy.values());
+    }
+
+    @ParameterizedTest
+    @MethodSource("slidingWindowConfig")
+    void circuitBreakerMetrics(SlidingWindowSynchronizationStrategy slidingWindowSynchronizationStrategy) {
         CircuitBreakerConfig circuitBreakerConfig = CircuitBreakerConfig.custom()
-            .slidingWindow(10, 10, CircuitBreakerConfig.SlidingWindowType.COUNT_BASED)
+            .clock(MockClock.at(2019, 1, 1, 12, 0, 0, ZoneId.of("UTC")))
+            .slidingWindow(
+                10,
+                10,
+                CircuitBreakerConfig.SlidingWindowType.COUNT_BASED,
+                slidingWindowSynchronizationStrategy
+            )
             .build();
 
         CircuitBreakerMetrics circuitBreakerMetrics = CircuitBreakerMetrics
-            .forClosed(circuitBreakerConfig, MockClock.at(2019, 1, 1, 12, 0, 0, ZoneId.of("UTC")));
+            .forClosed(circuitBreakerConfig);
 
         circuitBreakerMetrics.onSuccess(0, TimeUnit.NANOSECONDS);
         circuitBreakerMetrics.onSuccess(0, TimeUnit.NANOSECONDS);
@@ -74,7 +90,7 @@ public class CircuitBreakerMetricsTest {
         assertThat(circuitBreakerMetrics.getNumberOfFailedCalls()).isEqualTo(6);
         assertThat(circuitBreakerMetrics.getNumberOfSuccessfulCalls()).isEqualTo(4);
         assertThat(circuitBreakerMetrics.getFailureRate()).isEqualTo(60);
-        assertThat(Result.hasExceededThresholds(result)).isEqualTo(true);
+        assertThat(Result.hasExceededThresholds(result)).isTrue();
 
         circuitBreakerMetrics.onSuccess(0, TimeUnit.NANOSECONDS);
         circuitBreakerMetrics.onSuccess(0, TimeUnit.NANOSECONDS);

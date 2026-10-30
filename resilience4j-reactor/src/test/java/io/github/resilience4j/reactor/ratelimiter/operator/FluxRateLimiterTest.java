@@ -1,5 +1,5 @@
 /*
- * Copyright 2018 Julien Hoarau
+ * Copyright 2026 Julien Hoarau
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,8 +20,8 @@ import io.github.resilience4j.ratelimiter.RateLimiterConfig;
 import io.github.resilience4j.ratelimiter.RequestNotPermitted;
 import io.github.resilience4j.reactor.ratelimiter.operator.OverloadException.SpecificOverloadException;
 import io.github.resilience4j.reactor.ratelimiter.operator.ResponseWithPotentialOverload.SpecificResponseWithPotentialOverload;
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Flux;
 import reactor.test.StepVerifier;
 
@@ -32,46 +32,60 @@ import static io.github.resilience4j.core.ResultUtils.isFailedAndThrown;
 import static io.github.resilience4j.core.ResultUtils.isSuccessfulAndReturned;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.BDDMockito.then;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.mock;
 
-public class FluxRateLimiterTest {
+class FluxRateLimiterTest {
 
     private RateLimiter rateLimiter;
 
-    @Before
-    public void setUp() {
+    @BeforeEach
+    void setUp() {
         rateLimiter = mock(RateLimiter.class, RETURNS_DEEP_STUBS);
     }
 
     @Test
-    public void shouldEmitEvent() {
-        given(rateLimiter.reservePermission()).willReturn(Duration.ofSeconds(0).toNanos());
+    void shouldEmitEvent() {
+        given(rateLimiter.reservePermission(1)).willReturn(Duration.ofSeconds(0).toNanos());
 
         StepVerifier.create(
-            Flux.just("Event 1", "Event 2")
-                .transformDeferred(RateLimiterOperator.of(rateLimiter)))
+                Flux.just("Event 1", "Event 2")
+                    .transformDeferred(RateLimiterOperator.of(rateLimiter)))
             .expectNext("Event 1")
             .expectNext("Event 2")
             .verifyComplete();
     }
 
     @Test
-    public void shouldDelaySubscription() {
-        given(rateLimiter.reservePermission()).willReturn(Duration.ofMillis(50).toNanos());
+    void shouldReservePermissionWithCustomPermits() {
+        given(rateLimiter.reservePermission(10)).willReturn(Duration.ofSeconds(0).toNanos());
 
         StepVerifier.create(
-            Flux.error(new IOException("BAM!"))
-                .log()
-                .transformDeferred(RateLimiterOperator.of(rateLimiter)))
+                Flux.just("Event 1", "Event 2")
+                    .transformDeferred(RateLimiterOperator.of(rateLimiter, 10)))
+            .expectNext("Event 1")
+            .expectNext("Event 2")
+            .verifyComplete();
+
+        then(rateLimiter).should().reservePermission(10);
+    }
+
+    @Test
+    void shouldDelaySubscription() {
+        given(rateLimiter.reservePermission(1)).willReturn(Duration.ofMillis(50).toNanos());
+
+        StepVerifier.create(
+                Flux.error(new IOException("BAM!"))
+                    .transformDeferred(RateLimiterOperator.of(rateLimiter)))
             .expectSubscription()
             .expectError(IOException.class)
             .verify(Duration.ofMillis(250));
     }
 
     @Test
-    public void shouldPropagateError() {
-        given(rateLimiter.reservePermission()).willReturn(Duration.ofSeconds(0).toNanos());
+    void shouldPropagateError() {
+        given(rateLimiter.reservePermission(1)).willReturn(Duration.ofSeconds(0).toNanos());
 
         StepVerifier.create(
             Flux.error(new IOException("BAM!"))
@@ -83,8 +97,8 @@ public class FluxRateLimiterTest {
     }
 
     @Test
-    public void shouldEmitRequestNotPermittedException() {
-        given(rateLimiter.reservePermission()).willReturn(-1L);
+    void shouldEmitRequestNotPermittedException() {
+        given(rateLimiter.reservePermission(1)).willReturn(-1L);
 
         StepVerifier.create(
             Flux.just("Event")
@@ -95,8 +109,8 @@ public class FluxRateLimiterTest {
     }
 
     @Test
-    public void shouldEmitRequestNotPermittedExceptionEvenWhenErrorDuringSubscribe() {
-        given(rateLimiter.reservePermission()).willReturn(-1L);
+    void shouldEmitRequestNotPermittedExceptionEvenWhenErrorDuringSubscribe() {
+        given(rateLimiter.reservePermission(1)).willReturn(-1L);
 
         StepVerifier.create(
             Flux.error(new IOException("BAM!"))
@@ -107,7 +121,7 @@ public class FluxRateLimiterTest {
     }
 
     @Test
-    public void shouldDrainRateLimiterInConditionMetOnFailedCall() {
+    void shouldDrainRateLimiterInConditionMetOnFailedCall() {
         RateLimiter rateLimiter = RateLimiter.of("someLimiter", RateLimiterConfig.custom()
             .limitForPeriod(5)
             .limitRefreshPeriod(Duration.ofHours(1))
@@ -125,7 +139,7 @@ public class FluxRateLimiterTest {
     }
 
     @Test
-    public void shouldDrainRateLimiterInConditionMetOnSuccessfulCall() {
+    void shouldDrainRateLimiterInConditionMetOnSuccessfulCall() {
         RateLimiter rateLimiter = RateLimiter.of("someLimiter", RateLimiterConfig.custom()
             .limitForPeriod(5)
             .limitRefreshPeriod(Duration.ofHours(1))
@@ -147,7 +161,7 @@ public class FluxRateLimiterTest {
     }
 
     @Test
-    public void shouldNotDrainRateLimiterInConditionNotMetOnSuccessfulCall() {
+    void shouldNotDrainRateLimiterInConditionNotMetOnSuccessfulCall() {
         RateLimiter rateLimiter = RateLimiter.of("someLimiter", RateLimiterConfig.custom()
             .limitForPeriod(5)
             .limitRefreshPeriod(Duration.ofHours(1))

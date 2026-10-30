@@ -1,8 +1,15 @@
 plugins {
-    id 'java-platform'
-    id 'maven-publish'
-    id 'com.jfrog.bintray'
-    id 'com.jfrog.artifactory'
+    id("java-platform")
+    id("maven-publish")
+    id("signing")
+}
+
+signing {
+    def gpgKey = System.getenv("GPG_KEY")
+    def gpgPassphrase = System.getenv("GPG_PASSPHRASE")
+    required = gpgKey != null
+    useInMemoryPgpKeys(gpgKey, gpgPassphrase)
+    sign publishing.publications
 }
 
 def projectArtifactId = 'resilience4j'
@@ -43,41 +50,6 @@ publishing {
     }
 }
 
-bintray {
-    user = project.hasProperty('bintrayUsername') ? project.property('bintrayUsername') : ''
-    key = project.hasProperty('bintrayApiKey') ? project.property('bintrayApiKey') : ''
-    dryRun = false //Whether to run this as dry-run, without deploying
-    publish = true //If version should be auto published after an upload
-    publications = ['resilience4j']
-    pkg {
-        repo = 'Maven'
-        name = "${projectArtifactId}"
-        userOrg = "${projectArtifactId}"
-        websiteUrl = "${url}"
-        issueTrackerUrl = 'https://github.com/resilience4j/resilience4j/issues'
-        vcsUrl = 'https://github.com/resilience4j/resilience4j.git'
-        desc = project.description
-        licenses = ['Apache-2.0']
-        version {
-            name = project.version
-            vcsTag = "v${project.version}"
-            gpg {
-                sign = true //Determines whether to GPG sign the files. The default is false
-                //Optional. The passphrase for GPG signing'
-                passphrase = project.hasProperty('gpgPassphrase') ? project.property('gpgPassphrase') : ''
-            }
-            mavenCentralSync {
-                sync = true
-                //Optional (true by default). Determines whether to sync the version to Maven Central.
-                user = project.hasProperty('ossUser') ? project.property('ossUser') : ''
-                //OSS user token
-                password = project.hasProperty('ossPassword') ? project.property('ossPassword') : ''
-                //OSS user password
-            }
-        }
-    }
-}
-
 dependencies {
     constraints {
         api project(":resilience4j-core")
@@ -90,20 +62,19 @@ dependencies {
         api project(":resilience4j-circularbuffer")
         api project(":resilience4j-metrics")
         api project(":resilience4j-consumer")
-        api project(":resilience4j-vertx")
         api project(":resilience4j-annotations")
-        api project(":resilience4j-spring")
-        api project(":resilience4j-spring-boot2")
-        api project(":resilience4j-spring-cloud2")
-        api project(":resilience4j-retrofit")
+        api project(":resilience4j-spring6")
+        api project(":resilience4j-spring-boot3")
+        api project(":resilience4j-spring-boot4")
         api project(":resilience4j-feign")
-        api project(":resilience4j-ratpack")
-        api project(":resilience4j-prometheus")
         api project(":resilience4j-timelimiter")
         api project(":resilience4j-rxjava2")
         api project(":resilience4j-rxjava3")
         api project(":resilience4j-reactor")
         api project(":resilience4j-micrometer")
+        api project(":resilience4j-micronaut")
+        api project(":resilience4j-micronaut-annotation")
         api project(":resilience4j-kotlin")
+        api project(":resilience4j-vavr")
     }
 }

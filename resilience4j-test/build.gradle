@@ -1,6 +1,9 @@
-artifactoryPublish.skip = true
+//artifactoryPublish.skip = true
 sonarqube.skipProject = true
 dependencies {
-    compile project(':resilience4j-core')
+    api(libs.rxjava2)
+
+    implementation(project(":resilience4j-core"))
+    implementation(libs.vavr)
 }
-ext.moduleName = 'io.github.resilience4j.test'
+ext.moduleName = "io.github.resilience4j.test"

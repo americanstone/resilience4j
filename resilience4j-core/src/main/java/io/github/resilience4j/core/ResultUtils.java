@@ -18,12 +18,16 @@
  */
 package io.github.resilience4j.core;
 
-import io.vavr.control.Either;
+import io.github.resilience4j.core.functions.Either;
 
 import java.util.function.Function;
 
 public class ResultUtils {
 
+    private ResultUtils() {
+    }
+
+    @SuppressWarnings("unchecked")
     public static <T> boolean isSuccessfulAndReturned(
         Either<? extends Throwable, ?> callsResult,
         Class<T> expectedClass,
@@ -47,6 +51,7 @@ public class ResultUtils {
         return isFailedAndThrown(callsResult, expectedClass, thrown -> true);
     }
 
+    @SuppressWarnings("unchecked")
     public static <T extends Throwable>  boolean isFailedAndThrown(
         Either<? extends Throwable, ?> callsResult,
         Class<T> expectedClass,

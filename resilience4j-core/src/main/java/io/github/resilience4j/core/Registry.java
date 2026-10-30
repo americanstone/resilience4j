@@ -22,8 +22,8 @@ import io.github.resilience4j.core.registry.EntryAddedEvent;
 import io.github.resilience4j.core.registry.EntryRemovedEvent;
 import io.github.resilience4j.core.registry.EntryReplacedEvent;
 import io.github.resilience4j.core.registry.RegistryEvent;
-import io.vavr.collection.Map;
 
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -87,6 +87,14 @@ public interface Registry<E, C> {
      * @return an EventPublisher
      */
     EventPublisher<E> getEventPublisher();
+
+    /**
+     +     * Removes a configuration from the registry
+     +     *
+     +     * @param configName    the configuration name
+     +     * @return configuration mapped to the configName.
+     +     */
+    C removeConfiguration(String configName);
 
     /**
      * An EventPublisher can be used to register event consumers.

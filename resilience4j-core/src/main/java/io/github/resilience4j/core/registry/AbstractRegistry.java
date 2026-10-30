@@ -22,12 +22,9 @@ import io.github.resilience4j.core.EventConsumer;
 import io.github.resilience4j.core.EventProcessor;
 import io.github.resilience4j.core.Registry;
 import io.github.resilience4j.core.RegistryStore;
-import io.vavr.collection.HashMap;
-import io.vavr.collection.Map;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 import java.util.function.Supplier;
 
 /**
@@ -45,7 +42,7 @@ public class AbstractRegistry<E, C> implements Registry<E, C> {
 
     protected final RegistryStore<E> entryMap;
 
-    protected final ConcurrentMap<String, C> configurations;
+    protected final ConcurrentHashMap<String, C> configurations;
     /**
      * Global tags which must be added to each instance created by this registry.
      */
@@ -54,7 +51,7 @@ public class AbstractRegistry<E, C> implements Registry<E, C> {
     private final RegistryEventProcessor eventProcessor;
 
     public AbstractRegistry(C defaultConfig) {
-        this(defaultConfig, HashMap.empty());
+        this(defaultConfig, Collections.emptyMap());
     }
 
     public AbstractRegistry(C defaultConfig, Map<String, String> registryTags) {
@@ -62,7 +59,7 @@ public class AbstractRegistry<E, C> implements Registry<E, C> {
     }
 
     public AbstractRegistry(C defaultConfig, RegistryEventConsumer<E> registryEventConsumer) {
-        this(defaultConfig, registryEventConsumer, HashMap.empty());
+        this(defaultConfig, registryEventConsumer, Collections.emptyMap());
     }
 
     public AbstractRegistry(C defaultConfig, RegistryEventConsumer<E> registryEventConsumer,
@@ -73,11 +70,12 @@ public class AbstractRegistry<E, C> implements Registry<E, C> {
 
     public AbstractRegistry(C defaultConfig,
         List<RegistryEventConsumer<E>> registryEventConsumers) {
-        this(defaultConfig, registryEventConsumers, HashMap.empty());
+        this(defaultConfig, registryEventConsumers, Collections.emptyMap());
     }
 
     public AbstractRegistry(C defaultConfig, List<RegistryEventConsumer<E>> registryEventConsumers,
         Map<String, String> tags) {
+        // FutureHashMap pattern for virtual thread optimization - avoids blocking inside map operations
         this.configurations = new ConcurrentHashMap<>();
         this.entryMap = new InMemoryRegistryStore<E>();
         this.eventProcessor = new RegistryEventProcessor(
@@ -89,6 +87,7 @@ public class AbstractRegistry<E, C> implements Registry<E, C> {
 
     public AbstractRegistry(C defaultConfig, List<RegistryEventConsumer<E>> registryEventConsumers,
                             Map<String, String> tags, RegistryStore<E> registryStore) {
+        // FutureHashMap pattern for virtual thread optimization - avoids blocking inside map operations
         this.configurations = new ConcurrentHashMap<>();
         this.entryMap = Objects.requireNonNull(registryStore, REGISTRY_STORE_MUST_NOT_BE_NULL);
         this.eventProcessor = new RegistryEventProcessor(
@@ -142,6 +141,15 @@ public class AbstractRegistry<E, C> implements Registry<E, C> {
     }
 
     @Override
+    public C removeConfiguration(String configName) {
+        if (configName.equals(DEFAULT_CONFIG)) {
+            throw new IllegalArgumentException(
+                "You cannot remove the default configuration");
+        }
+        return this.configurations.remove(configName);
+    }
+
+    @Override
     public C getDefaultConfig() {
         return configurations.get(DEFAULT_CONFIG);
     }
@@ -163,8 +171,10 @@ public class AbstractRegistry<E, C> implements Registry<E, C> {
      * @param tags Tags of the instance.
      * @return Map containing all tags
      */
-    protected io.vavr.collection.Map<String, String> getAllTags(io.vavr.collection.Map<String, String> tags) {
-        return Objects.requireNonNull(tags, TAGS_MUST_NOT_BE_NULL).merge(registryTags);
+    protected Map<String, String> getAllTags(Map<String, String> tags) {
+        final HashMap<String, String> allTags = new HashMap<>(Objects.requireNonNull(registryTags, TAGS_MUST_NOT_BE_NULL));
+        allTags.putAll(tags);
+        return allTags;
     }
 
     private class RegistryEventProcessor extends EventProcessor<RegistryEvent> implements

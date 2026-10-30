@@ -1,5 +1,5 @@
 /*
- * Copyright 2017 Dan Maas
+ * Copyright 2026 Dan Maas
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,11 +21,9 @@ import io.github.resilience4j.retry.Retry;
 import io.github.resilience4j.retry.RetryConfig;
 import io.github.resilience4j.test.HelloWorldException;
 import io.github.resilience4j.test.HelloWorldService;
-import org.junit.Before;
-import org.junit.BeforeClass;
-import org.junit.Test;
-import reactor.blockhound.BlockHound;
-import reactor.blockhound.integration.ReactorIntegration;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
@@ -34,27 +32,28 @@ import java.io.IOException;
 import java.time.Duration;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 
-public class RetryOperatorTest {
+class RetryOperatorTest {
 
     private HelloWorldService helloWorldService;
 
-    @BeforeClass
-    public static void beforeClass() {
-        BlockHound.install(new ReactorIntegration());
+    @BeforeAll
+    static void beforeClass() {
+        //BlockHound.install(new ReactorIntegration());
     }
 
-    @Before
-    public void setUp() {
+    @BeforeEach
+    void setUp() {
         helloWorldService = mock(HelloWorldService.class);
     }
 
     @Test
-    public void returnOnCompleteUsingMono() {
+    void returnOnCompleteUsingMono() {
         RetryConfig config = retryConfig();
         Retry retry = Retry.of("testName", config);
         RetryOperator<String> retryOperator = RetryOperator.of(retry);
@@ -79,28 +78,29 @@ public class RetryOperatorTest {
         Retry.Metrics metrics = retry.getMetrics();
         assertThat(metrics.getNumberOfSuccessfulCallsWithoutRetryAttempt()).isEqualTo(1);
         assertThat(metrics.getNumberOfSuccessfulCallsWithRetryAttempt()).isEqualTo(1);
-        assertThat(metrics.getNumberOfFailedCallsWithRetryAttempt()).isEqualTo(0);
-        assertThat(metrics.getNumberOfFailedCallsWithoutRetryAttempt()).isEqualTo(0);
+        assertThat(metrics.getNumberOfFailedCallsWithRetryAttempt()).isZero();
+        assertThat(metrics.getNumberOfFailedCallsWithoutRetryAttempt()).isZero();
     }
 
-
-    @Test(expected = StackOverflowError.class)
-    public void shouldNotRetryUsingMonoStackOverFlow() {
+    @Test
+    void shouldNotRetryUsingMonoStackOverFlow() {
         RetryConfig config = retryConfig();
         Retry retry = Retry.of("testName", config);
         RetryOperator<String> retryOperator = RetryOperator.of(retry);
         given(helloWorldService.returnHelloWorld())
             .willThrow(new StackOverflowError("BAM!"));
 
-        StepVerifier.create(Mono.fromCallable(helloWorldService::returnHelloWorld)
-            .transformDeferred(retryOperator))
-            .expectSubscription()
-            .expectError(StackOverflowError.class)
-            .verify(Duration.ofSeconds(1));
+        assertThatThrownBy(() ->
+            StepVerifier.create(Mono.fromCallable(helloWorldService::returnHelloWorld)
+                .transformDeferred(retryOperator))
+                .expectSubscription()
+                .expectError(StackOverflowError.class)
+                .verify(Duration.ofSeconds(1)))
+            .isInstanceOf(StackOverflowError.class);
     }
 
     @Test
-    public void shouldNotRetryWhenItThrowErrorMono() {
+    void shouldNotRetryWhenItThrowErrorMono() {
         RetryConfig config = retryConfig();
         Retry retry = Retry.of("testName", config);
         RetryOperator<String> retryOperator = RetryOperator.of(retry);
@@ -115,13 +115,12 @@ public class RetryOperatorTest {
 
         then(helloWorldService).should().returnHelloWorld();
         Retry.Metrics metrics = retry.getMetrics();
-        assertThat(metrics.getNumberOfFailedCallsWithRetryAttempt()).isEqualTo(0);
-        assertThat(metrics.getNumberOfFailedCallsWithoutRetryAttempt()).isEqualTo(0);
+        assertThat(metrics.getNumberOfFailedCallsWithRetryAttempt()).isZero();
+        assertThat(metrics.getNumberOfFailedCallsWithoutRetryAttempt()).isZero();
     }
 
-
     @Test
-    public void returnOnErrorUsingMono() {
+    void returnOnErrorUsingMono() {
         RetryConfig config = retryConfig();
         Retry retry = Retry.of("testName", config);
         RetryOperator<String> retryOperator = RetryOperator.of(retry);
@@ -143,11 +142,11 @@ public class RetryOperatorTest {
         then(helloWorldService).should(times(6)).returnHelloWorld();
         Retry.Metrics metrics = retry.getMetrics();
         assertThat(metrics.getNumberOfFailedCallsWithRetryAttempt()).isEqualTo(2);
-        assertThat(metrics.getNumberOfFailedCallsWithoutRetryAttempt()).isEqualTo(0);
+        assertThat(metrics.getNumberOfFailedCallsWithoutRetryAttempt()).isZero();
     }
 
     @Test
-    public void doNotRetryFromPredicateUsingMono() {
+    void doNotRetryFromPredicateUsingMono() {
         RetryConfig config = RetryConfig.custom()
             .retryOnException(t -> t instanceof IOException)
             .waitDuration(Duration.ofMillis(50))
@@ -165,11 +164,11 @@ public class RetryOperatorTest {
         then(helloWorldService).should().returnHelloWorld();
         Retry.Metrics metrics = retry.getMetrics();
         assertThat(metrics.getNumberOfFailedCallsWithoutRetryAttempt()).isEqualTo(1);
-        assertThat(metrics.getNumberOfFailedCallsWithRetryAttempt()).isEqualTo(0);
+        assertThat(metrics.getNumberOfFailedCallsWithRetryAttempt()).isZero();
     }
 
     @Test
-    public void retryOnResultUsingMono() {
+    void retryOnResultUsingMono() {
         RetryConfig config = RetryConfig.<String>custom()
             .retryOnResult("retry"::equals)
             .waitDuration(Duration.ofMillis(10))
@@ -188,12 +187,12 @@ public class RetryOperatorTest {
 
         then(helloWorldService).should(times(2)).returnHelloWorld();
         Retry.Metrics metrics = retry.getMetrics();
-        assertThat(metrics.getNumberOfFailedCallsWithoutRetryAttempt()).isEqualTo(0);
+        assertThat(metrics.getNumberOfFailedCallsWithoutRetryAttempt()).isZero();
         assertThat(metrics.getNumberOfSuccessfulCallsWithRetryAttempt()).isEqualTo(1);
     }
 
     @Test
-    public void retryOnResultFailAfterMaxAttemptsUsingMono() {
+    void retryOnResultFailAfterMaxAttemptsUsingMono() {
         RetryConfig config = RetryConfig.<String>custom()
             .retryOnResult("retry"::equals)
             .waitDuration(Duration.ofMillis(10))
@@ -213,7 +212,7 @@ public class RetryOperatorTest {
     }
 
     @Test
-    public void retryOnResultFailAfterMaxAttemptsWithExceptionUsingMono() {
+    void retryOnResultFailAfterMaxAttemptsWithExceptionUsingMono() {
         RetryConfig config = RetryConfig.<String>custom()
             .retryOnResult("retry"::equals)
             .waitDuration(Duration.ofMillis(10))
@@ -234,7 +233,7 @@ public class RetryOperatorTest {
     }
 
     @Test
-    public void shouldFailWithExceptionFlux() {
+    void shouldFailWithExceptionFlux() {
         RetryConfig config = retryConfig();
         Retry retry = Retry.of("testName", config);
         RetryOperator<Object> retryOperator = RetryOperator.of(retry);
@@ -246,14 +245,14 @@ public class RetryOperatorTest {
             .verify(Duration.ofSeconds(1));
 
         Retry.Metrics metrics = retry.getMetrics();
-        assertThat(metrics.getNumberOfSuccessfulCallsWithoutRetryAttempt()).isEqualTo(0);
-        assertThat(metrics.getNumberOfSuccessfulCallsWithRetryAttempt()).isEqualTo(0);
+        assertThat(metrics.getNumberOfSuccessfulCallsWithoutRetryAttempt()).isZero();
+        assertThat(metrics.getNumberOfSuccessfulCallsWithRetryAttempt()).isZero();
         assertThat(metrics.getNumberOfFailedCallsWithRetryAttempt()).isEqualTo(1);
-        assertThat(metrics.getNumberOfFailedCallsWithoutRetryAttempt()).isEqualTo(0);
+        assertThat(metrics.getNumberOfFailedCallsWithoutRetryAttempt()).isZero();
     }
 
     @Test
-    public void retryOnResultUsingFlux() {
+    void retryOnResultUsingFlux() {
         RetryConfig config = RetryConfig.<String>custom()
             .retryOnResult("retry"::equals)
             .waitDuration(Duration.ofMillis(10))
@@ -269,12 +268,12 @@ public class RetryOperatorTest {
             .verify(Duration.ofMillis(100));
 
         Retry.Metrics metrics = retry.getMetrics();
-        assertThat(metrics.getNumberOfFailedCallsWithoutRetryAttempt()).isEqualTo(0);
+        assertThat(metrics.getNumberOfFailedCallsWithoutRetryAttempt()).isZero();
         assertThat(metrics.getNumberOfFailedCallsWithRetryAttempt()).isEqualTo(1);
     }
 
     @Test
-    public void retryOnResultFailAfterMaxAttemptsUsingFlux() {
+    void retryOnResultFailAfterMaxAttemptsUsingFlux() {
         RetryConfig config = RetryConfig.<String>custom()
             .retryOnResult("retry"::equals)
             .waitDuration(Duration.ofMillis(10))
@@ -289,12 +288,12 @@ public class RetryOperatorTest {
             .verify(Duration.ofSeconds(1));
 
         Retry.Metrics metrics = retry.getMetrics();
-        assertThat(metrics.getNumberOfFailedCallsWithoutRetryAttempt()).isEqualTo(0);
+        assertThat(metrics.getNumberOfFailedCallsWithoutRetryAttempt()).isZero();
         assertThat(metrics.getNumberOfFailedCallsWithRetryAttempt()).isEqualTo(1);
     }
 
     @Test
-    public void retryOnResultFailAfterMaxAttemptsWithExceptionUsingFlux() {
+    void retryOnResultFailAfterMaxAttemptsWithExceptionUsingFlux() {
         RetryConfig config = RetryConfig.<String>custom()
             .retryOnResult("retry"::equals)
             .waitDuration(Duration.ofMillis(10))
@@ -311,7 +310,7 @@ public class RetryOperatorTest {
             .verify(Duration.ofSeconds(1));
 
         Retry.Metrics metrics = retry.getMetrics();
-        assertThat(metrics.getNumberOfFailedCallsWithoutRetryAttempt()).isEqualTo(0);
+        assertThat(metrics.getNumberOfFailedCallsWithoutRetryAttempt()).isZero();
         assertThat(metrics.getNumberOfFailedCallsWithRetryAttempt()).isEqualTo(1);
     }
 

@@ -1,9 +1,8 @@
 package io.github.resilience4j.core;
 
-import io.vavr.collection.Stream;
-
 import java.time.Duration;
 import java.util.function.Function;
+import java.util.stream.LongStream;
 
 import static io.github.resilience4j.core.IntervalFunctionCompanion.*;
 import static java.util.Objects.requireNonNull;
@@ -35,7 +34,7 @@ public interface IntervalFunction extends Function<Integer, Long> {
 
         return (attempt) -> {
             checkAttempt(attempt);
-            return Stream.iterate(intervalMillis, backoffFunction).get(attempt - 1);
+            return LongStream.iterate(intervalMillis, n -> backoffFunction.apply(n)).skip(attempt - 1L).findFirst().getAsLong();
         };
     }
 
@@ -109,7 +108,6 @@ public interface IntervalFunction extends Function<Integer, Long> {
     }
 
     static IntervalFunction ofExponentialBackoff(long initialIntervalMillis, double multiplier) {
-        checkMultiplier(multiplier);
         return of(initialIntervalMillis, x -> (long) (x * multiplier));
     }
 
@@ -136,6 +134,7 @@ public interface IntervalFunction extends Function<Integer, Long> {
         long maxIntervalMillis
     ) {
         checkInterval(maxIntervalMillis);
+        checkRandomizationFactor(randomizationFactor);
         return attempt -> {
             checkAttempt(attempt);
             final long interval = ofExponentialRandomBackoff(initialIntervalMillis, multiplier, randomizationFactor)
@@ -150,7 +149,6 @@ public interface IntervalFunction extends Function<Integer, Long> {
         double randomizationFactor
     ) {
         checkInterval(initialIntervalMillis);
-        checkMultiplier(multiplier);
         checkRandomizationFactor(randomizationFactor);
         return attempt -> {
             checkAttempt(attempt);
@@ -242,8 +240,9 @@ final class IntervalFunctionCompanion {
         final double delta = randomizationFactor * current;
         final double min = current - delta;
         final double max = current + delta;
+        final double randomizedValue = min + (Math.random() * (max - min + 1));
 
-        return (min + (Math.random() * (max - min + 1)));
+        return Math.max(1.0, randomizedValue);
     }
 
     static void checkInterval(long intervalMillis) {
@@ -253,14 +252,8 @@ final class IntervalFunctionCompanion {
         }
     }
 
-    static void checkMultiplier(double multiplier) {
-        if (multiplier < 1.0) {
-            throw new IllegalArgumentException("Illegal argument multiplier: " + multiplier);
-        }
-    }
-
     static void checkRandomizationFactor(double randomizationFactor) {
-        if (randomizationFactor < 0.0 || randomizationFactor >= 1.0) {
+        if (randomizationFactor < 0.0 || randomizationFactor > 1.0) {
             throw new IllegalArgumentException(
                 "Illegal argument randomizationFactor: " + randomizationFactor);
         }

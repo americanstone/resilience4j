@@ -36,13 +36,8 @@ abstract class AbstractThreadPoolBulkheadMetrics extends AbstractMetrics {
         this.names = requireNonNull(names);
     }
 
-    @Deprecated
-    protected AbstractThreadPoolBulkheadMetrics(MetricNames names) {
-        this.names = requireNonNull(names);
-    }
-
     protected void addMetrics(MeterRegistry meterRegistry, ThreadPoolBulkhead bulkhead) {
-        List<Tag> customTags = mapToTagsList(bulkhead.getTags().toJavaMap());
+        List<Tag> customTags = mapToTagsList(bulkhead.getTags());
         registerMetrics(meterRegistry, bulkhead, customTags);
     }
 
@@ -86,10 +81,21 @@ abstract class AbstractThreadPoolBulkheadMetrics extends AbstractMetrics {
             .tags(customTags)
             .register(meterRegistry).getId());
 
+        idSet.add(Gauge.builder(names.getActiveThreadCountMetricName(), bulkhead,
+            bh -> bh.getMetrics().getActiveThreadCount())
+            .description("The number of active threads")
+            .tag(TagNames.NAME, bulkhead.getName())
+            .tags(customTags)
+            .register(meterRegistry).getId());
+
+        idSet.add(Gauge.builder(names.getAvailableThreadCountMetricName(), bulkhead,
+            bh -> bh.getMetrics().getAvailableThreadCount())
+            .description("The number of available threads")
+            .tag(TagNames.NAME, bulkhead.getName())
+            .tags(customTags)
+            .register(meterRegistry).getId());
+
         meterIdMap.put(bulkhead.getName(), idSet);
     }
 
-    @Deprecated
-    public static class MetricNames extends ThreadPoolBulkheadMetricNames {
-    }
 }

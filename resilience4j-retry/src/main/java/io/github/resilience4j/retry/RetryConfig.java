@@ -26,7 +26,9 @@ import io.github.resilience4j.core.predicate.PredicateCreator;
 
 import java.io.Serializable;
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.Optional;
+import java.util.function.BiConsumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
 
@@ -40,28 +42,32 @@ public class RetryConfig implements Serializable {
     private static final IntervalBiFunction DEFAULT_INTERVAL_BI_FUNCTION = IntervalBiFunction.ofIntervalFunction(DEFAULT_INTERVAL_FUNCTION);
     private static final Predicate<Throwable> DEFAULT_RECORD_FAILURE_PREDICATE = throwable -> true;
 
+
     @SuppressWarnings("unchecked")
     private Class<? extends Throwable>[] retryExceptions = new Class[0];
     @SuppressWarnings("unchecked")
     private Class<? extends Throwable>[] ignoreExceptions = new Class[0];
 
     @Nullable
-    private Predicate<Throwable> retryOnExceptionPredicate;
+    private transient Predicate<Throwable> retryOnExceptionPredicate;
 
     @Nullable
-    private Predicate retryOnResultPredicate;
+    private transient Predicate retryOnResultPredicate;
+
+    @Nullable
+    private BiConsumer consumeResultBeforeRetryAttempt;
 
     private int maxAttempts = DEFAULT_MAX_ATTEMPTS;
     private boolean failAfterMaxAttempts = false;
     private boolean writableStackTraceEnabled = true;
 
     @Nullable
-    private IntervalFunction intervalFunction;
+    private transient IntervalFunction intervalFunction;
 
-    private IntervalBiFunction intervalBiFunction = DEFAULT_INTERVAL_BI_FUNCTION;
+    private transient IntervalBiFunction intervalBiFunction = DEFAULT_INTERVAL_BI_FUNCTION;
 
     // The final exception predicate
-    private Predicate<Throwable> exceptionPredicate;
+    private transient Predicate<Throwable> exceptionPredicate;
 
     private RetryConfig() {
     }
@@ -135,7 +141,7 @@ public class RetryConfig implements Serializable {
     }
 
     /**
-     * Return the Predicate which evaluates if an result should be retried. The Predicate must
+     * Return the Predicate which evaluates if a result should be retried. The Predicate must
      * return true if the result should be retried, otherwise it must return false.
      *
      * @param <T> The type of result.
@@ -145,6 +151,32 @@ public class RetryConfig implements Serializable {
     @Nullable
     public <T> Predicate<T> getResultPredicate() {
         return retryOnResultPredicate;
+    }
+
+    /**
+     * Return the BiConsumer which performs post actions if the result should be retried.
+     *
+     * @param <T> The type of result.
+     * @return the onFailureBiConsumer
+     */
+    public <T> BiConsumer<Integer, T> getConsumeResultBeforeRetryAttempt(){
+        return consumeResultBeforeRetryAttempt;
+    }
+
+    @Override
+    public String toString() {
+        return "RetryConfig{" +
+            "maxAttempts=" + maxAttempts +
+            ", failAfterMaxAttempts=" + failAfterMaxAttempts +
+            ", writableStackTraceEnabled=" + writableStackTraceEnabled +
+            ", intervalFunction=" + intervalFunction +
+            ", retryOnExceptionPredicate=" + retryOnExceptionPredicate +
+            ", retryOnResultPredicate=" + retryOnResultPredicate +
+            ", intervalBiFunction=" + intervalBiFunction +
+            ", consumeResultBeforeRetryAttempt=" + consumeResultBeforeRetryAttempt +
+            ", retryExceptions=" + Arrays.toString(retryExceptions) +
+            ", ignoreExceptions=" + Arrays.toString(ignoreExceptions) +
+            "}";
     }
 
     public static class Builder<T> {
@@ -164,11 +196,13 @@ public class RetryConfig implements Serializable {
         @Nullable
         private IntervalBiFunction<T> intervalBiFunction;
 
+        @Nullable
+        BiConsumer<Integer, T> consumeResultBeforeRetryAttempt;
+
         @SuppressWarnings("unchecked")
         private Class<? extends Throwable>[] retryExceptions = new Class[0];
         @SuppressWarnings("unchecked")
         private Class<? extends Throwable>[] ignoreExceptions = new Class[0];
-
 
         public Builder() {
         }
@@ -178,6 +212,7 @@ public class RetryConfig implements Serializable {
             this.maxAttempts = baseConfig.maxAttempts;
             this.retryOnExceptionPredicate = baseConfig.retryOnExceptionPredicate;
             this.retryOnResultPredicate = baseConfig.retryOnResultPredicate;
+            this.consumeResultBeforeRetryAttempt = baseConfig.consumeResultBeforeRetryAttempt;
             this.failAfterMaxAttempts = baseConfig.failAfterMaxAttempts;
             this.writableStackTraceEnabled = baseConfig.writableStackTraceEnabled;
             this.retryExceptions = baseConfig.retryExceptions;
@@ -200,7 +235,7 @@ public class RetryConfig implements Serializable {
 
         public Builder<T> waitDuration(Duration waitDuration) {
             if (waitDuration.toMillis() >= 0) {
-                this.intervalBiFunction = (attempt, either) -> waitDuration.toMillis();
+                this.intervalBiFunction((attempt, either) -> waitDuration.toMillis());
             } else {
                 throw new IllegalArgumentException(
                     "waitDuration must be a positive value");
@@ -217,6 +252,17 @@ public class RetryConfig implements Serializable {
          */
         public Builder<T> retryOnResult(Predicate<T> predicate) {
             this.retryOnResultPredicate = predicate;
+            return this;
+        }
+
+        /**
+         * Configure a BiConsumer which performs post actions if a result should be retried.
+         *
+         * @param consumeResultBeforeRetryAttempt the BiConsumer which performs post actions if a result should be retried.
+         * @return the RetryConfig.Builder
+         */
+        public Builder<T> consumeResultBeforeRetryAttempt(BiConsumer<Integer, T> consumeResultBeforeRetryAttempt){
+            this.consumeResultBeforeRetryAttempt = consumeResultBeforeRetryAttempt;
             return this;
         }
 
@@ -255,6 +301,7 @@ public class RetryConfig implements Serializable {
          */
         public Builder<T> intervalFunction(IntervalFunction f) {
             this.intervalFunction = f;
+            this.intervalBiFunction = null;
             return this;
         }
 
@@ -266,6 +313,7 @@ public class RetryConfig implements Serializable {
          */
         public Builder<T> intervalBiFunction(IntervalBiFunction<T> f) {
             this.intervalBiFunction = f;
+            this.intervalFunction = null;
             return this;
         }
 
@@ -343,6 +391,7 @@ public class RetryConfig implements Serializable {
             config.writableStackTraceEnabled = writableStackTraceEnabled;
             config.retryOnExceptionPredicate = retryOnExceptionPredicate;
             config.retryOnResultPredicate = retryOnResultPredicate;
+            config.consumeResultBeforeRetryAttempt = consumeResultBeforeRetryAttempt;
             config.retryExceptions = retryExceptions;
             config.ignoreExceptions = ignoreExceptions;
             config.exceptionPredicate = createExceptionPredicate();
@@ -367,11 +416,8 @@ public class RetryConfig implements Serializable {
         }
 
         private Predicate<Throwable> createRetryOnExceptionPredicate() {
-            return PredicateCreator.createExceptionsPredicate(retryExceptions)
-                .map(predicate -> retryOnExceptionPredicate != null ? predicate
-                    .or(retryOnExceptionPredicate) : predicate)
-                .orElseGet(() -> retryOnExceptionPredicate != null ? retryOnExceptionPredicate
-                    : DEFAULT_RECORD_FAILURE_PREDICATE);
+            return PredicateCreator.createExceptionsPredicate(retryOnExceptionPredicate, retryExceptions)
+                .orElse(DEFAULT_RECORD_FAILURE_PREDICATE);
         }
     }
 }

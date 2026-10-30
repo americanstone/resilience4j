@@ -27,7 +27,9 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.RejectedExecutionHandler;
+import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 
 import static java.util.Arrays.stream;
@@ -51,7 +53,7 @@ public class ThreadPoolBulkheadConfig {
     private int coreThreadPoolSize = DEFAULT_CORE_THREAD_POOL_SIZE;
     private int queueCapacity = DEFAULT_QUEUE_CAPACITY;
     private Duration keepAliveDuration = DEFAULT_KEEP_ALIVE_DURATION;
-    private boolean writableStackTraceEnabled = DEFAULT_WRITABLE_STACK_TRACE_ENABLED;
+    private boolean writableStackTraceEnabled = DEFAULT_WRITABLE_STACK_TRACE_ENABLED;    
     private List<ContextPropagator> contextPropagators = new ArrayList<>();
     private RejectedExecutionHandler rejectedExecutionHandler = new ThreadPoolExecutor.AbortPolicy();
 
@@ -113,16 +115,15 @@ public class ThreadPoolBulkheadConfig {
 
     @Override
     public String toString() {
-        final StringBuilder sb = new StringBuilder("ThreadPoolBulkheadConfig{");
-        sb.append("maxThreadPoolSize=").append(maxThreadPoolSize);
-        sb.append(", coreThreadPoolSize=").append(coreThreadPoolSize);
-        sb.append(", queueCapacity=").append(queueCapacity);
-        sb.append(", keepAliveDuration=").append(keepAliveDuration);
-        sb.append(", writableStackTraceEnabled=").append(writableStackTraceEnabled);
-        sb.append(", contextPropagators=").append(contextPropagators);
-        sb.append(", rejectExecutionHandle=").append(rejectedExecutionHandler.getClass().getSimpleName());
-        sb.append('}');
-        return sb.toString();
+        return "ThreadPoolBulkheadConfig{" +
+            "maxThreadPoolSize=" + maxThreadPoolSize +
+            ", coreThreadPoolSize=" + coreThreadPoolSize +
+            ", queueCapacity=" + queueCapacity +
+            ", keepAliveDuration=" + keepAliveDuration +
+            ", writableStackTraceEnabled=" + writableStackTraceEnabled +
+            ", contextPropagators=" + contextPropagators +
+            ", rejectedExecutionHandler=" + rejectedExecutionHandler.getClass().getSimpleName() +
+            "}";
     }
 
     public static class Builder {
@@ -131,7 +132,14 @@ public class ThreadPoolBulkheadConfig {
         private ThreadPoolBulkheadConfig config;
 
         public Builder(ThreadPoolBulkheadConfig bulkheadConfig) {
-            this.config = bulkheadConfig;
+            config = new ThreadPoolBulkheadConfig();
+            config.maxThreadPoolSize = bulkheadConfig.maxThreadPoolSize;
+            config.coreThreadPoolSize = bulkheadConfig.coreThreadPoolSize;
+            config.queueCapacity = bulkheadConfig.queueCapacity;
+            config.keepAliveDuration = bulkheadConfig.keepAliveDuration;
+            config.writableStackTraceEnabled = bulkheadConfig.writableStackTraceEnabled;
+            config.contextPropagators = new ArrayList<>(bulkheadConfig.contextPropagators);
+            config.rejectedExecutionHandler = bulkheadConfig.rejectedExecutionHandler;
         }
 
         public Builder() {
@@ -190,14 +198,15 @@ public class ThreadPoolBulkheadConfig {
 
         /**
          * Configures the capacity of the queue.
+         * Use {@link SynchronousQueue} when {@code queueCapacity == 0} or {@link ArrayBlockingQueue} when {@code queueCapacity > 0}.
          *
          * @param queueCapacity max concurrent calls
          * @return the BulkheadConfig.Builder
          */
         public Builder queueCapacity(int queueCapacity) {
-            if (queueCapacity < 1) {
+            if (queueCapacity < 0) {
                 throw new IllegalArgumentException(
-                    "queueCapacity must be a positive integer value >= 1");
+                    "queueCapacity must be a positive integer value >= 0");
             }
             config.queueCapacity = queueCapacity;
             return this;

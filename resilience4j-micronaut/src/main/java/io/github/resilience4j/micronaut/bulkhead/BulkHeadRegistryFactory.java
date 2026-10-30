@@ -21,19 +21,21 @@ import io.github.resilience4j.bulkhead.BulkheadRegistry;
 import io.github.resilience4j.bulkhead.event.BulkheadEvent;
 import io.github.resilience4j.common.CompositeCustomizer;
 import io.github.resilience4j.common.bulkhead.configuration.BulkheadConfigCustomizer;
-import io.github.resilience4j.common.bulkhead.configuration.BulkheadConfigurationProperties;
+import io.github.resilience4j.common.bulkhead.configuration.CommonBulkheadConfigurationProperties;
 import io.github.resilience4j.consumer.DefaultEventConsumerRegistry;
 import io.github.resilience4j.consumer.EventConsumerRegistry;
 import io.github.resilience4j.core.registry.CompositeRegistryEventConsumer;
 import io.github.resilience4j.core.registry.RegistryEventConsumer;
+import io.github.resilience4j.ratelimiter.RateLimiter;
+import io.github.resilience4j.ratelimiter.event.RateLimiterEvent;
 import io.micronaut.context.annotation.Bean;
 import io.micronaut.context.annotation.Factory;
 import io.micronaut.context.annotation.Primary;
 import io.micronaut.context.annotation.Requires;
 import io.micronaut.core.util.StringUtils;
+import jakarta.inject.Singleton;
 
 import javax.annotation.Nullable;
-import javax.inject.Singleton;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -56,7 +58,7 @@ public class BulkHeadRegistryFactory {
     @Singleton
     @Requires(beans = BulkheadProperties.class)
     public BulkheadRegistry bulkheadRegistry(
-        BulkheadConfigurationProperties bulkheadConfigurationProperties,
+        CommonBulkheadConfigurationProperties bulkheadConfigurationProperties,
         @BulkheadQualifier EventConsumerRegistry<BulkheadEvent> bulkheadEventConsumerRegistry,
         @BulkheadQualifier RegistryEventConsumer<Bulkhead> bulkheadRegistryEventConsumer,
         @BulkheadQualifier CompositeCustomizer<BulkheadConfigCustomizer> compositeBulkheadCustomizer) {
@@ -99,23 +101,27 @@ public class BulkHeadRegistryFactory {
      */
     private void registerEventConsumer(BulkheadRegistry bulkheadRegistry,
                                        EventConsumerRegistry<BulkheadEvent> eventConsumerRegistry,
-                                       BulkheadConfigurationProperties bulkheadConfigurationProperties) {
-        bulkheadRegistry.getEventPublisher().onEntryAdded(
-            event -> registerEventConsumer(eventConsumerRegistry, event.getAddedEntry(),
-                bulkheadConfigurationProperties));
+                                       CommonBulkheadConfigurationProperties bulkheadConfigurationProperties) {
+        bulkheadRegistry.getEventPublisher()
+            .onEntryAdded(event -> registerEventConsumer(eventConsumerRegistry, event.getAddedEntry(), bulkheadConfigurationProperties))
+            .onEntryReplaced(event -> registerEventConsumer(eventConsumerRegistry, event.getNewEntry(), bulkheadConfigurationProperties))
+            .onEntryRemoved(event -> unregisterEventConsumer(eventConsumerRegistry, event.getRemovedEntry()));
+    }
+
+    private void unregisterEventConsumer(EventConsumerRegistry<BulkheadEvent> eventConsumerRegistry, Bulkhead bulkHead) {
+        eventConsumerRegistry.removeEventConsumer(bulkHead.getName());
     }
 
     private void registerEventConsumer(EventConsumerRegistry<BulkheadEvent> eventConsumerRegistry,
-                                       Bulkhead bulkHead, BulkheadConfigurationProperties bulkheadConfigurationProperties) {
+                                       Bulkhead bulkHead, CommonBulkheadConfigurationProperties bulkheadConfigurationProperties) {
         int eventConsumerBufferSize = Optional
             .ofNullable(bulkheadConfigurationProperties.getBackendProperties(bulkHead.getName()))
             .map(
-                io.github.resilience4j.common.bulkhead.configuration.BulkheadConfigurationProperties.InstanceProperties::getEventConsumerBufferSize)
+                io.github.resilience4j.common.bulkhead.configuration.CommonBulkheadConfigurationProperties.InstanceProperties::getEventConsumerBufferSize)
             .orElse(100);
         bulkHead.getEventPublisher().onEvent(
             eventConsumerRegistry.createEventConsumer(bulkHead.getName(), eventConsumerBufferSize));
     }
-
 
     /**
      * Initializes a bulkhead registry.
@@ -125,14 +131,13 @@ public class BulkHeadRegistryFactory {
      * @return a BulkheadRegistry
      */
     private BulkheadRegistry createBulkheadRegistry(
-        BulkheadConfigurationProperties bulkheadConfigurationProperties,
+        CommonBulkheadConfigurationProperties bulkheadConfigurationProperties,
         RegistryEventConsumer<Bulkhead> bulkheadRegistryEventConsumer,
         CompositeCustomizer<BulkheadConfigCustomizer> compositeBulkheadCustomizer) {
         Map<String, BulkheadConfig> configs = bulkheadConfigurationProperties.getConfigs()
             .entrySet().stream().collect(Collectors.toMap(Map.Entry::getKey,
                 entry -> bulkheadConfigurationProperties.createBulkheadConfig(entry.getValue(),
                     compositeBulkheadCustomizer, entry.getKey())));
-        return BulkheadRegistry.of(configs, bulkheadRegistryEventConsumer,
-            io.vavr.collection.HashMap.ofAll(bulkheadConfigurationProperties.getTags()));
+        return BulkheadRegistry.of(configs, bulkheadRegistryEventConsumer, bulkheadConfigurationProperties.getTags());
     }
 }

@@ -1,6 +1,22 @@
-ext.moduleName = 'io.github.resilience4j.core'
+apply plugin: "java-test-fixtures"
+
+ext.moduleName = "io.github.resilience4j.core"
 
 dependencies {
-    testCompile(libraries.mock_clock)
-    testCompile project(':resilience4j-test')
+    testFixturesImplementation(libs.bundles.testing)
+    testFixturesImplementation(platform(libs.junit.bom))
+    testFixturesImplementation(libs.junit.jupiter)
+    testFixturesImplementation(libs.slf4j)
+
+    testImplementation(libs.mock.clock)
+}
+
+test {
+    jvmArgs "-Xmx2G"
+}
+
+jmh {
+    if (project.hasProperty('jmhIncludes')) {
+        includes = [project.property('jmhIncludes')]
+    }
 }

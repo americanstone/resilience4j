@@ -28,10 +28,20 @@ import static java.util.stream.Collectors.toMap;
 /**
  * Abstraction to retrieve, copy and clean up values across thread boundary. This class is
  * specifically use for propagating {@link ThreadLocal} across different thread boundaries.
+ * <p>
+ * NOTE: For Java 21 and above with virtual threads, consider using Scoped Values (JEP 429)
+ * instead of ThreadLocal for better memory efficiency and to avoid virtual thread pinning.
+ * ThreadLocal usage with many virtual threads can lead to high memory usage as each virtual
+ * thread maintains its own copy of ThreadLocal values. Additionally, when a carrier thread
+ * is executing a virtual thread that accesses ThreadLocal variables, the virtual thread
+ * becomes "pinned" to that carrier thread until the ThreadLocal access completes, which
+ * reduces the concurrency benefits of virtual threads.
  *
  * @param <T> value type that is copied across thread boundary.
  */
-public interface ContextPropagator<T> {
+public interface  ContextPropagator<T> {
+
+    public static final String CONTEXT_PROPAGATOR_LIST_SHOULD_BE_NON_NULL = "ContextPropagator list should be non null";
 
     /**
      * Retrieves value from the currently executing thread. This method should produce values (as
@@ -89,7 +99,7 @@ public interface ContextPropagator<T> {
     static <T> Supplier<T> decorateSupplier(List<? extends ContextPropagator> propagators,
                                             Supplier<T> supplier) {
 
-        Objects.requireNonNull(propagators, "ContextPropagator list should be non null");
+        Objects.requireNonNull(propagators, CONTEXT_PROPAGATOR_LIST_SHOULD_BE_NON_NULL);
 
         //Create identity map of <ContextPropagator,Optional Supplier value>, if we have duplicate ContextPropagators then last one wins.
         final Map<? extends ContextPropagator, Object> values = propagators.stream()
@@ -140,7 +150,7 @@ public interface ContextPropagator<T> {
     static <T> Callable<T> decorateCallable(List<? extends ContextPropagator> propagators,
                                             Callable<T> callable) {
 
-        Objects.requireNonNull(propagators, "ContextPropagator list should be non null");
+        Objects.requireNonNull(propagators, CONTEXT_PROPAGATOR_LIST_SHOULD_BE_NON_NULL);
 
         //Create identity map of <ContextPropagator,Optional Supplier value>, if we have duplicate ContextPropagators then last one wins.
         final Map<? extends ContextPropagator, Object> values = propagators.stream()
@@ -170,7 +180,7 @@ public interface ContextPropagator<T> {
      */
     static <T> Runnable decorateRunnable(List<? extends ContextPropagator> propagators,
                                          Runnable runnable) {
-        Objects.requireNonNull(propagators, "ContextPropagator list should be non null");
+        Objects.requireNonNull(propagators, CONTEXT_PROPAGATOR_LIST_SHOULD_BE_NON_NULL);
 
         //Create identity map of <ContextPropagator,Optional Supplier value>, if we have duplicate ContextPropagators then last one wins.
         final Map<? extends ContextPropagator, Object> values = propagators.stream()
@@ -230,18 +240,18 @@ public interface ContextPropagator<T> {
 
         @Override
         public Supplier<Optional<T>> retrieve() {
-            return () -> Optional.empty();
+            return Optional::empty;
         }
 
         @Override
         public Consumer<Optional<T>> copy() {
-            return (t) -> {
+            return t -> {
             };
         }
 
         @Override
         public Consumer<Optional<T>> clear() {
-            return (t) -> {
+            return t -> {
             };
         }
     }

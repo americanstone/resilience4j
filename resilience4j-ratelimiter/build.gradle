@@ -1,4 +1,7 @@
 dependencies {
-    compile project(':resilience4j-core')
+    api(project(":resilience4j-core"))
+
+    testImplementation(libs.vavr)
+    testImplementation(testFixtures(project(":resilience4j-core")))
 }
-ext.moduleName = 'io.github.resilience4j.ratelimiter'
+ext.moduleName = "io.github.resilience4j.ratelimiter"

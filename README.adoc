@@ -11,8 +11,9 @@ ifdef::env-github[]
 :warning-caption: :warning:
 endif::[]
 
-image:https://travis-ci.org/resilience4j/resilience4j.svg?branch=master["Build Status", link="https://travis-ci.org/resilience4j/resilience4j"]
-image:https://api.bintray.com/packages/resilience4j/Maven/resilience4j/images/download.svg[link="https://bintray.com/resilience4j/Maven/resilience4j/_latestVersion"]
+image:https://github.com/resilience4j/resilience4j/actions/workflows/gradle-build.yml/badge.svg["Build Status"]
+image:https://img.shields.io/nexus/r/io.github.resilience4j/resilience4j-circuitbreaker?server=https%3A%2F%2Foss.sonatype.org["Release"]
+image:https://img.shields.io/nexus/s/io.github.resilience4j/resilience4j-circuitbreaker?server=https%3A%2F%2Foss.sonatype.org["Snapshot"]
 image:http://img.shields.io/badge/license-ASF2-blue.svg["Apache License 2", link="http://www.apache.org/licenses/LICENSE-2.0.txt"]
 
 image:https://sonarcloud.io/api/project_badges/measure?project=resilience4j_resilience4j&metric=coverage["Coverage", link="https://sonarcloud.io/dashboard?id=resilience4j_resilience4j"]
@@ -22,20 +23,19 @@ image:https://sonarcloud.io/api/project_badges/measure?project=resilience4j_resi
 image:https://sonarcloud.io/api/project_badges/measure?project=resilience4j_resilience4j&metric=vulnerabilities["Vulnerabilities", link="https://sonarcloud.io/dashboard?id=resilience4j_resilience4j"]
 image:https://sonarcloud.io/api/project_badges/measure?project=resilience4j_resilience4j&metric=bugs["Bugs", link="https://sonarcloud.io/dashboard?id=resilience4j_resilience4j"]
 
+image:https://raw.githubusercontent.com/vshymanskyy/StandWithUkraine/main/banner2-direct.svg["SWUbanner",link="https://vshymanskyy.github.io/StandWithUkraine"]
+
 toc::[]
 
 == Introduction
 
-Resilience4j is a lightweight fault tolerance library inspired by https://github.com/Netflix/Hystrix[Netflix Hystrix], but designed for Java 8 and functional programming.
-Lightweight, because the library only uses http://www.vavr.io/[Vavr], which does not have any other external library dependencies.
-Netflix Hystrix, in contrast, has a compile dependency to https://github.com/Netflix/archaius[Archaius] which has many more external library dependencies such as Guava and Apache Commons Configuration.
-
-WARNING: Netflix Hystrix is no longer in active development, and is currently in maintenance mode.
-
+Resilience4j is a lightweight fault tolerance library designed for functional programming.
 Resilience4j provides higher-order functions (decorators) to enhance any functional interface,
 lambda expression or method reference with a Circuit Breaker, Rate Limiter, Retry or Bulkhead.
 You can stack more than one decorator on any functional interface, lambda expression or method reference.
 The advantage is that you have the choice to select the decorators you need and nothing else.
+
+Resilience4j 3 requires Java 21.
 
 [source,java]
 ----
@@ -109,11 +109,227 @@ Resilience4j provides several core modules:
 * resilience4j-timelimiter: Timeout handling
 * resilience4j-cache: Result caching
 
-There are also add-on modules for metrics, Retrofit, Feign, Kotlin, Spring, Ratpack, Vertx, RxJava2 and more.
+There are also add-on modules for metrics, Feign, Kotlin, Spring, Ratpack, Vertx, RxJava2 and more.
 
 NOTE: Find out full list of modules in our *https://resilience4j.readme.io/docs#section-modularization[User Guide]*.
 
-TIP: For core modules package or `Decorators` builder see *https://mvnrepository.com/artifact/io.github.resilience4j/resilience4j-all[resilience4j-all]*.
+TIP: For core modules package or `+Decorators+` builder see *https://mvnrepository.com/artifact/io.github.resilience4j/resilience4j-all[resilience4j-all]*.
+
+== Best Practices
+
+=== Instance Management: When to Share vs. Not Share Instances
+
+One of the most important concepts for newcomers to understand is when to create separate instances versus when to share instances across different remote services or backends.
+
+[IMPORTANT]
+====
+*The Golden Rule:* Create a unique instance (with a unique ID) for each protected remote service or backend you communicate with.
+====
+
+==== Why Unique Instances Matter
+
+Creating separate instances for each backend service is critical for:
+
+1. *Proper metrics collection* - Each instance tracks its own metrics, allowing you to monitor the health of individual services
+2. *Isolation of failures* - If Service A fails, it won't affect the resilience patterns protecting Service B
+3. *Independent configuration* - Different backends may require different circuit breaker thresholds, concurrency limits, rate limits, or retry policies
+
+==== Instance-Aware vs. Non-Instance-Aware Patterns
+
+Different resilience patterns have different requirements for instance separation:
+
+===== Instance-Aware Patterns (MUST NOT Share)
+
+These patterns maintain state that is specific to a particular service and *MUST* have separate instances:
+
+* *CircuitBreaker* - Tracks failure rates and state (OPEN/CLOSED/HALF_OPEN) per service
++
+[source,java]
+----
+// CORRECT: Separate CircuitBreaker for each service
+CircuitBreaker paymentServiceCB = CircuitBreaker.ofDefaults("paymentService");
+CircuitBreaker inventoryServiceCB = CircuitBreaker.ofDefaults("inventoryService");
+CircuitBreaker notificationServiceCB = CircuitBreaker.ofDefaults("notificationService");
+
+// WRONG: Sharing one CircuitBreaker across multiple services
+CircuitBreaker sharedCB = CircuitBreaker.ofDefaults("shared"); // DON'T DO THIS!
+// If one service fails, the circuit opens for ALL services!
+----
+
+* *Bulkhead* (both SemaphoreBulkhead and ThreadPoolBulkhead) - Manages concurrent call limits per service
++
+[source,java]
+----
+// CORRECT: Separate Bulkhead for each service
+Bulkhead paymentBulkhead = Bulkhead.ofDefaults("paymentService");
+Bulkhead inventoryBulkhead = Bulkhead.ofDefaults("inventoryService");
+
+// WRONG: Sharing limits resource isolation benefits
+Bulkhead sharedBulkhead = Bulkhead.ofDefaults("shared"); // DON'T DO THIS!
+----
+
+* *RateLimiter* - Controls request rate per service
++
+[source,java]
+----
+// CORRECT: Different rate limits for different services
+RateLimiter apiRateLimiter = RateLimiter.ofDefaults("externalAPI");
+RateLimiter dbRateLimiter = RateLimiter.ofDefaults("database");
+----
+
+===== Non-Instance-Aware Patterns (CAN Share, But Better Not To)
+
+These patterns create fresh context for each execution and don't maintain service-specific state:
+
+* *Retry* - Configuration can be shared, but unique instances are still recommended for proper metrics
+* *TimeLimiter* - Timeout settings can be shared if identical across services
+
+[source,java]
+----
+// TECHNICALLY OK: Retry doesn't maintain state between calls
+Retry sharedRetry = Retry.ofDefaults("shared");
+
+// BETTER: Unique instances provide better metrics and monitoring
+Retry paymentRetry = Retry.ofDefaults("paymentService");
+Retry inventoryRetry = Retry.ofDefaults("inventoryService");
+
+// Now you can track:
+// - How many retry attempts failed for paymentService specifically
+// - How many retry attempts failed for inventoryService specifically
+----
+
+==== Recommended Approach: Always Use Unique Instances
+
+Even for patterns that *can* be shared, creating unique instances is the recommended approach because:
+
+* *Better observability* - Metrics are tagged by instance name, letting you see which backend is struggling
+* *Easier troubleshooting* - Clear separation makes debugging production issues simpler
+* *Future flexibility* - If you later need different configurations per service, instances are already separated
+
+===== Complete Example: Multiple Services
+
+[source,java]
+----
+// You have 3 backend services to protect
+public class ServiceOrchestrator {
+
+    // Payment Service protection
+    private final CircuitBreaker paymentCB = CircuitBreaker.ofDefaults("paymentService");
+    private final Retry paymentRetry = Retry.ofDefaults("paymentService");
+    private final Bulkhead paymentBulkhead = Bulkhead.ofDefaults("paymentService");
+
+    // Inventory Service protection
+    private final CircuitBreaker inventoryCB = CircuitBreaker.ofDefaults("inventoryService");
+    private final Retry inventoryRetry = Retry.ofDefaults("inventoryService");
+    private final Bulkhead inventoryBulkhead = Bulkhead.ofDefaults("inventoryService");
+
+    // Notification Service protection
+    private final CircuitBreaker notificationCB = CircuitBreaker.ofDefaults("notificationService");
+    private final Retry notificationRetry = Retry.ofDefaults("notificationService");
+
+    public Order processOrder(OrderRequest request) {
+        // Each service call is protected by its own set of resilience instances
+
+        // Call payment service
+        Supplier<PaymentResult> paymentCall = () -> paymentService.charge(request);
+        PaymentResult payment = Decorators.ofSupplier(paymentCall)
+            .withCircuitBreaker(paymentCB)
+            .withRetry(paymentRetry)
+            .withBulkhead(paymentBulkhead)
+            .decorate()
+            .get();
+
+        // Call inventory service
+        Supplier<InventoryResult> inventoryCall = () -> inventoryService.reserve(request);
+        InventoryResult inventory = Decorators.ofSupplier(inventoryCall)
+            .withCircuitBreaker(inventoryCB)
+            .withRetry(inventoryRetry)
+            .withBulkhead(inventoryBulkhead)
+            .decorate()
+            .get();
+
+        // Call notification service (demonstrates circuit isolation: the notification circuit breaker remains independent of the payment circuit breaker, even if payment opens its circuit in other calls)
+        Runnable notificationCall = () -> notificationService.send(request);
+        Decorators.ofRunnable(notificationCall)
+            .withCircuitBreaker(notificationCB)
+            .withRetry(notificationRetry)
+            .decorate()
+            .run();
+
+        return new Order(payment, inventory);
+    }
+}
+----
+
+==== Using Registries for Instance Management
+
+Resilience4j provides Registry classes to manage multiple instances efficiently:
+
+[source,java]
+----
+// Create a registry with custom default configuration
+CircuitBreakerConfig defaultConfig = CircuitBreakerConfig.custom()
+    .failureRateThreshold(50)
+    .waitDurationInOpenState(Duration.ofSeconds(30))
+    .build();
+
+CircuitBreakerRegistry registry = CircuitBreakerRegistry.of(defaultConfig);
+
+// Get or create instances by name
+CircuitBreaker paymentCB = registry.circuitBreaker("paymentService");
+CircuitBreaker inventoryCB = registry.circuitBreaker("inventoryService");
+
+// You can also override config for specific instances
+CircuitBreakerConfig customConfig = CircuitBreakerConfig.custom()
+    .failureRateThreshold(80)  // More lenient for this service
+    .build();
+CircuitBreaker legacyCB = registry.circuitBreaker("legacyService", customConfig);
+----
+
+NOTE: Registries are particularly useful in Spring Boot applications where they're auto-configured and instances are created on-demand based on configuration properties.
+
+==== Summary
+
+[cols="<.<*", options="header"]
+|===
+|Pattern |Can Share? |Should Share? |Why?
+
+|*CircuitBreaker*
+|No
+|No
+|State is service-specific. Sharing causes one service's failures to affect all others.
+
+|*Bulkhead*
+|No
+|No
+|Concurrent call limits must be isolated per service for proper resource management.
+
+|*RateLimiter*
+|No
+|No
+|Rate limits are typically different per service and sharing defeats the purpose.
+
+|*Retry*
+|Yes
+|No
+|While technically safe to share, unique instances provide better metrics and observability.
+
+|*TimeLimiter*
+|Yes
+|No
+|While technically safe to share, unique instances provide better metrics and observability.
+
+|*Cache*
+|Depends
+|Depends
+|Only share if the cached data is truly identical across use cases.
+
+|===
+
+[TIP]
+====
+When in doubt, create separate instances. The overhead is minimal, and the benefits for metrics, debugging, and flexibility are significant.
+====
 
 == Resilience patterns
 
@@ -134,7 +350,6 @@ https://resilience4j.readme.io/docs/getting-started-3#annotations[Spring]
 |<<circuitbreaker-retry-fallback,overview>>,
 https://resilience4j.readme.io/docs/circuitbreaker[documentation],
 https://resilience4j.readme.io/docs/feign[Feign],
-https://resilience4j.readme.io/docs/retrofit[Retrofit],
 https://resilience4j.readme.io/docs/getting-started-3#annotations[Spring]
 
 |**Rate Limiter**
@@ -143,14 +358,12 @@ https://resilience4j.readme.io/docs/getting-started-3#annotations[Spring]
 |<<ratelimiter,overview>>,
 https://resilience4j.readme.io/docs/ratelimiter[documentation],
 https://resilience4j.readme.io/docs/feign[Feign],
-https://resilience4j.readme.io/docs/retrofit[Retrofit],
 https://resilience4j.readme.io/docs/getting-started-3#annotations[Spring]
 
 |**Time Limiter**
 |limits duration of execution
 |Beyond a certain wait interval, a successful result is unlikely.
 |https://resilience4j.readme.io/docs/timeout[documentation],
-https://resilience4j.readme.io/docs/retrofit[Retrofit],
 https://resilience4j.readme.io/docs/getting-started-3#annotations[Spring]
 
 |**Bulkhead**
@@ -181,7 +394,27 @@ Find out more about components in our *https://resilience4j.readme.io/docs/getti
 
 == Spring Boot
 
-Setup and usage in Spring Boot 2 is demonstrated https://github.com/resilience4j/resilience4j-spring-boot2-demo[here].
+Setup and usage in Spring Boot 3 is demonstrated https://github.com/resilience4j/resilience4j-spring-boot3-demo[here].
+
+Virtual thread support (Java 21 Project Loom)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Starting with Resilience4j 3 you can switch the internal schedulers to Java *virtual threads*.
+
+[source,yaml]
+----
+resilience4j:
+  thread:
+    type: virtual
+----
+
+The same can also be enabled via JVM argument:
+
+```
+-Dresilience4j.thread.type=virtual
+```
+
+If the property (or system property) is omitted the library falls back to regular *platform* threads.
 
 == Usage examples
 
@@ -202,7 +435,7 @@ public interface BackendService {
 
 // Create a CircuitBreaker (use default configuration)
 CircuitBreaker circuitBreaker = CircuitBreaker.ofDefaults("backendName");
-// Create a Retry with at most 3 retries and a fixed time interval between retries of 500ms
+// Create a Retry with at most 3 attempts (1 initial call + 2 retries) and a fixed wait interval of 500ms before each retry
 Retry retry = Retry.ofDefaults("backendName");
 
 // Decorate your call to BackendService.doSomething() with a CircuitBreaker
@@ -213,7 +446,8 @@ Supplier<String> decoratedSupplier = CircuitBreaker
 decoratedSupplier = Retry
     .decorateSupplier(retry, decoratedSupplier);
 
-// Execute the decorated supplier and recover from any exception
+// Use of Vavr's Try to
+// execute the decorated supplier and recover from any exception
 String result = Try.ofSupplier(decoratedSupplier)
     .recover(throwable -> "Hello from Recovery").get();
 
@@ -233,7 +467,7 @@ Observable.fromCallable(backendService::doSomething)
     .compose(CircuitBreakerOperator.of(circuitBreaker))
 ----
 
-NOTE: Resilience4j also provides RxJava operators for `RateLimiter`, `Bulkhead`, `TimeLimiter` and `Retry`.
+NOTE: Resilience4j also provides RxJava operators for `+RateLimiter+`, `+Bulkhead+`, `+TimeLimiter+` and `+Retry+`.
 Find out more in our *https://resilience4j.readme.io/docs/getting-started-2[User Guide]*.
 
 ==== CircuitBreaker and Spring Reactor
@@ -247,7 +481,7 @@ Mono.fromCallable(backendService::doSomething)
     .transformDeferred(CircuitBreakerOperator.of(circuitBreaker))
 ----
 
-NOTE: Resilience4j also provides Reactor operators for `RateLimiter`, `Bulkhead`, `TimeLimiter` and `Retry`.
+NOTE: Resilience4j also provides Reactor operators for `+RateLimiter+`, `+Bulkhead+`, `+TimeLimiter+` and `+Retry+`.
 Find out more in our *https://resilience4j.readme.io/docs/getting-started-1[User Guide]*.
 
 [[ratelimiter]]
@@ -287,7 +521,7 @@ There are two isolation strategies and bulkhead implementations.
 ==== SemaphoreBulkhead
 The following example shows how to decorate a lambda expression with a Bulkhead.
 A Bulkhead can be used to limit the amount of parallel executions.
-This bulkhead abstraction should work well across a variety of threading and io models.
+This bulkhead abstraction should work well across a variety of threading and I/O models.
 It is based on a semaphore, and unlike Hystrix, does not provide "shadow" thread pool option.
 
 [source,java]
@@ -330,13 +564,13 @@ CompletionStage<String> execution = bulkhead
 [[events]]
 == Consume emitted events
 
-`CircuitBreaker`, `RateLimiter`, `Cache`, `Bulkhead`, `TimeLimiter` and `Retry` components emit a stream of events.
+`+CircuitBreaker+`, `+RateLimiter+`, `+Cache+`, `+Bulkhead+`, `+TimeLimiter+` and `+Retry+` components emit a stream of events.
 It can be consumed for logging, assertions and any other purpose.
 
 === Examples
 
-A `CircuitBreakerEvent` can be a state transition, a circuit breaker reset, a successful call, a recorded error or an ignored error.
-All events contains additional information like event creation time and processing duration of the call.
+A `+CircuitBreakerEvent+` can be a state transition, a circuit breaker reset, a successful call, a recorded error or an ignored error.
+All events contain additional information like event creation time and processing duration of the call.
 If you want to consume events, you have to register an event consumer.
 
 [source,java]
@@ -352,8 +586,8 @@ circuitBreaker.getEventPublisher()
     .onEvent(event -> logger.info(...));
 ----
 
-You can use RxJava or Spring Reactor Adapters to convert the `EventPublisher` into a Reactive Stream.
-The advantage of a Reactive Stream is that you can use RxJava's `observeOn` operator to specify a different Scheduler that the CircuitBreaker will use to send notifications to its observers/consumers.
+You can use RxJava or Spring Reactor Adapters to convert the `+EventPublisher+` into a Reactive Stream.
+The advantage of a Reactive Stream is that you can use RxJava's `+observeOn+` operator to specify a different Scheduler that the CircuitBreaker will use to send notifications to its observers/consumers.
 
 [source,java]
 ----
@@ -407,6 +641,7 @@ Find out more in our *https://resilience4j.readme.io/[User Guide]*.
 * *Topia* (In an HR application built with microservices architecture)
 * *Auto Trader Group plc* (The largest Britain digital automotive marketplace)
 * *PlayStation Network* (A platform backend)
+* *TUI InfoTec GmbH* (Backend applications inside of reservation booking workflow streams for accommodations)
 
 == License
 

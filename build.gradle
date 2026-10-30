@@ -1,32 +1,30 @@
 plugins {
-    id "org.sonarqube" version "3.1.1"
-    id "com.jfrog.bintray" version "1.8.5"
-    id "me.champeau.gradle.jmh" version "0.4.8"
-    id 'org.asciidoctor.convert' version '1.6.0'
-    id "com.jfrog.artifactory" version "4.18.3"
-    id "org.gradle.test-retry" version "1.2.1"
-    id 'idea'
-}
-
-apply from: "${rootDir}/libraries.gradle"
-
-ext {
-    releaseVersion = '1.7.0'
+    alias(libs.plugins.sonarqube)
+    alias(libs.plugins.asciidoctor)
+    alias(libs.plugins.test.retry)
+    alias(libs.plugins.nexus.publish)
+    alias(libs.plugins.bnd.builder) apply false
+    alias(libs.plugins.jmh)
+    id("idea")
+    id("jacoco-report-aggregation")
+    id("jvm-test-suite")
 }
 
 allprojects {
-    apply plugin: 'jacoco'
+    apply plugin: "jacoco"
 
-    version = '1.7.1-SNAPSHOT'
-    group = 'io.github.resilience4j'
-    description = 'Resilience4j is a lightweight, easy-to-use fault tolerance library designed for Java8 and functional programming'
+    version = version == "unspecified" ? "0.1.0-SNAPSHOT" : version
+    group = "io.github.resilience4j"
+    description = "Resilience4j is a lightweight, easy-to-use fault tolerance library designed for Java8 and functional programming"
 
     repositories {
-        jcenter()
         mavenCentral()
     }
+
+    jacoco {
+        toolVersion = "0.8.12"
+    }
 }
-artifactoryPublish.skip = true // apply to all projects except the root
 
 ext {
     coreProjects = subprojects.findAll {
@@ -34,45 +32,68 @@ ext {
     }
 }
 
+normalization {
+    runtimeClasspath {
+        metaInf {
+            ignoreAttribute("Build-Time")
+            ignoreAttribute("Build-Date")
+        }
+    }
+}
+
+dependencies {
+    coreProjects.each { jacocoAggregation(project(":${it.name}")) }
+}
+
+nexusPublishing {
+    repositories {
+        sonatype {
+            nexusUrl = uri("https://ossrh-staging-api.central.sonatype.com/service/local/")
+            snapshotRepositoryUrl = uri("https://central.sonatype.com/repository/maven-snapshots/")
+        }
+    }
+}
+
 configure(project.coreProjects) {
-    apply plugin: 'java'
-    apply plugin: 'osgi'
-    apply plugin: 'maven'
-    apply plugin: 'maven-publish'
-    apply plugin: 'com.jfrog.bintray'
-    apply plugin: 'com.jfrog.artifactory'
+    apply plugin: "java"
+    apply plugin: "java-library"
+    apply plugin: "maven-publish"
+    apply plugin: "signing"
     apply from: "${rootDir}/publishing.gradle"
-    apply plugin: 'me.champeau.gradle.jmh'
     apply plugin: "org.gradle.test-retry"
+    apply plugin: "me.champeau.jmh"
+
+    tasks.withType(Test).all {
+        if (JavaVersion.current().isCompatibleWith(JavaVersion.VERSION_17)) {
+            jvmArgs += [
+                    "--add-opens=java.base/java.lang=ALL-UNNAMED",
+                    "--add-opens=java.base/java.util.concurrent.locks=ALL-UNNAMED",
+                    "--add-opens=java.base/java.time=ALL-UNNAMED",
+                    "--add-opens=java.base/java.io=ALL-UNNAMED",
+            ]
+        }
+        if (JavaVersion.current().isCompatibleWith(JavaVersion.VERSION_21)) {
+            jvmArgs += ["-XX:+EnableDynamicAgentLoading"]
+        }
+    }
 
     dependencies {
-        compile(libraries.vavr)
-        compile(libraries.slf4j)
+        implementation(libs.slf4j)
 
         // JSR-305 only used for non-required meta-annotations
-        compileOnly "com.google.code.findbugs:jsr305:3.0.2"
+        compileOnly(libs.jsr305)
 
-        testCompile(libraries.junit)
-        testCompile(libraries.assertj)
-        testCompile(libraries.logback)
-        testCompile(libraries.mockito)
-        testCompile(libraries.powermock)
-        testCompile(libraries.powermock_api_mockito)
-        testCompile(libraries.powermock_module_junit4)
-        testCompile(libraries.awaitility)
-        testCompile(libraries.jaxws)
+        testImplementation(platform(libs.junit.bom))
+        testRuntimeOnly(libs.junit.platform.launcher)
+        testImplementation(libs.bundles.testing)
     }
 
     tasks.withType(JavaCompile) {
-        sourceCompatibility = "1.8"
-        targetCompatibility = "1.8"
+        sourceCompatibility = JavaVersion.VERSION_21
+        targetCompatibility = JavaVersion.VERSION_21
         options.deprecation = true
-        options.encoding = 'UTF-8'
+        options.encoding = "UTF-8"
         options.compilerArgs += ["-Xlint:unchecked", "-parameters"]
-    }
-
-    jmh {
-        duplicateClassesStrategy = 'warn'
     }
 
     test {
@@ -81,32 +102,40 @@ configure(project.coreProjects) {
             maxFailures = 20
             failOnPassedAfterRetry = true
         }
+        useJUnitPlatform()
     }
 
     jacocoTestReport {
         reports {
-            xml.enabled true
+            xml.required.set(true)
         }
     }
 
     afterEvaluate {
         jar {
-            inputs.property('moduleName', moduleName)
+            from("../") {
+                include "COPYRIGHT.txt"
+                include "LICENSE.txt"
+            }
+
+            inputs.property("moduleName", moduleName)
             manifest.attributes(
-                    'Automatic-Module-Name': moduleName
+                    "Automatic-Module-Name": moduleName
             )
         }
     }
 }
 
-def allTestCoverageFile = "${rootProject.projectDir}/build/reports/jacoco/report.xml"
+def allTestCoverageFile = "${rootProject.projectDir}/build/reports/jacoco/testCodeCoverageReport/testCodeCoverageReport.xml"
 
 sonarqube {
     properties {
+        property "sonar.host.url", "https://sonarcloud.io"
+        property "sonar.organization", "resilience4j"
         property "sonar.projectName", "resilience4j"
         property "sonar.projectKey", "resilience4j_resilience4j"
         property "sonar.links.homepage", "https://github.com/resilience4j/resilience4j"
-        property "sonar.links.ci", "https://travis-ci.org/resilience4j/resilience4j"
+        property "sonar.links.ci", "https://github.com/resilience4j/resilience4j/actions"
         property "sonar.links.scm", "https://github.com/resilience4j/resilience4j"
         property "sonar.links.issue", "https://github.com/resilience4j/resilience4j/issues"
         property "sonar.language", "java"
@@ -114,58 +143,4 @@ sonarqube {
     }
 }
 
-task jacocoMergeTest(type: JacocoMerge) {
-    destinationFile = file(allTestCoverageFile)
-    executionData = project.fileTree(dir: '.', include: '**/build/jacoco/test.exec')
-}
-
-task jacocoRootTestReport(type: JacocoReport) {
-
-    coreProjects.each { dependsOn("${it.name}:test") }
-    coreProjects.each { dependsOn("${it.name}:jacocoTestReport") }
-
-    additionalSourceDirs.from = coreProjects.sourceSets.main.allSource.srcDirs
-    sourceDirectories.from = coreProjects.sourceSets.main.allSource.srcDirs
-    classDirectories.from = coreProjects.sourceSets.main.output
-    executionData.setFrom project.fileTree(dir: '.', include: '**/build/jacoco/test.exec')
-
-    onlyIf {
-        true
-    }
-
-    reports {
-        xml.enabled true
-        xml.destination file(allTestCoverageFile)
-        html.enabled true
-        csv.enabled false
-    }
-}
-
-tasks.check.dependsOn tasks.jacocoRootTestReport
-tasks.jacocoRootTestReport.dependsOn tasks.test
-
-artifactory {
-    contextUrl = 'https://oss.jfrog.org'
-    resolve {
-        repository {
-            repoKey = 'libs-release'
-            maven = true
-        }
-    }
-    publish {
-        repository {
-            repoKey = 'oss-snapshot-local' //The Artifactory repository key to publish to
-            //when using oss.jfrog.org the credentials are from Bintray. For local build we expect them to be found in
-            //~/.gradle/gradle.properties, otherwise to be set in the build server
-            username = project.hasProperty('bintrayUsername') ? project.bintrayUsername : System.getenv('BINTRAY_USER')
-            password = project.hasProperty('bintrayApiKey') ? project.bintrayApiKey : System.getenv('BINTRAY_KEY')
-        }
-        defaults {
-            publications('resilience4j')
-        }
-    }
-    if (System.properties['https.proxyHost']) {
-        clientConfig.proxy.host = System.properties['https.proxyHost']
-        clientConfig.proxy.port = System.properties['https.proxyPort'].toInteger()
-    }
-}
+tasks.check.dependsOn tasks.testCodeCoverageReport

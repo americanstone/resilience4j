@@ -18,23 +18,23 @@
  */
 package io.github.resilience4j.ratelimiter.internal;
 
+import static java.lang.Long.min;
+import static java.lang.Thread.currentThread;
+import static java.util.Collections.emptyMap;
+import static java.util.concurrent.locks.LockSupport.parkNanos;
+
+import java.time.Duration;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
+import java.util.function.UnaryOperator;
+
 import io.github.resilience4j.ratelimiter.RateLimiter;
 import io.github.resilience4j.ratelimiter.RateLimiterConfig;
 import io.github.resilience4j.ratelimiter.event.RateLimiterOnDrainedEvent;
 import io.github.resilience4j.ratelimiter.event.RateLimiterOnFailureEvent;
 import io.github.resilience4j.ratelimiter.event.RateLimiterOnSuccessEvent;
-import io.vavr.collection.HashMap;
-import io.vavr.collection.Map;
-
-import java.time.Duration;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.UnaryOperator;
-
-import static java.lang.Long.min;
-import static java.lang.System.nanoTime;
-import static java.lang.Thread.currentThread;
-import static java.util.concurrent.locks.LockSupport.parkNanos;
 
 /**
  * {@link AtomicRateLimiter} splits all nanoseconds from the start of epoch into cycles.
@@ -54,16 +54,26 @@ public class AtomicRateLimiter implements RateLimiter {
     private final AtomicReference<State> state;
     private final Map<String, String> tags;
     private final RateLimiterEventProcessor eventProcessor;
+    private final Supplier<Long> nanoTimeSupplier;
 
     public AtomicRateLimiter(String name, RateLimiterConfig rateLimiterConfig) {
-        this(name, rateLimiterConfig, HashMap.empty());
+        this(name, rateLimiterConfig, System::nanoTime);
+    }
+
+    public AtomicRateLimiter(String name, RateLimiterConfig rateLimiterConfig, Supplier<Long> nanoTimeSupplier) {
+        this(name, rateLimiterConfig, emptyMap(), nanoTimeSupplier);
+    }
+
+    public AtomicRateLimiter(String name, RateLimiterConfig rateLimiterConfig, Map<String, String> tags) {
+        this(name, rateLimiterConfig, tags, System::nanoTime);
     }
 
     public AtomicRateLimiter(String name, RateLimiterConfig rateLimiterConfig,
-                             Map<String, String> tags) {
+                             Map<String, String> tags, Supplier<Long> nanoTimeSupplier) {
         this.name = name;
         this.tags = tags;
-        this.nanoTimeStart = nanoTime();
+        this.nanoTimeSupplier = nanoTimeSupplier;
+        this.nanoTimeStart = this.nanoTimeSupplier.get();
 
         waitingThreads = new AtomicInteger(0);
         state = new AtomicReference<>(new State(
@@ -103,8 +113,8 @@ public class AtomicRateLimiter implements RateLimiter {
     /**
      * Calculates time elapsed from the class loading.
      */
-    private long currentNanoTime() {
-        return nanoTime() - nanoTimeStart;
+    long currentNanoTime() {
+        return this.nanoTimeSupplier.get() - nanoTimeStart;
     }
 
     long getNanoTimeStart() {
@@ -390,7 +400,7 @@ public class AtomicRateLimiter implements RateLimiter {
         return "AtomicRateLimiter{" +
             "name='" + name + '\'' +
             ", rateLimiterConfig=" + state.get().config +
-            '}';
+            "}";
     }
 
     /**

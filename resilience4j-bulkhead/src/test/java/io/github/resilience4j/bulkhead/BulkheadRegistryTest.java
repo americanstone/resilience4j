@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright 2017 Robert Winkler, Lucas Lech
+ *  Copyright 2026 Robert Winkler, Lucas Lech
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -20,20 +20,28 @@ package io.github.resilience4j.bulkhead;
 
 import io.github.resilience4j.core.EventProcessor;
 import io.github.resilience4j.core.Registry;
-import io.github.resilience4j.core.registry.*;
-import io.vavr.Tuple;
+import io.github.resilience4j.core.registry.EntryAddedEvent;
+import io.github.resilience4j.core.registry.EntryRemovedEvent;
+import io.github.resilience4j.core.registry.EntryReplacedEvent;
+import io.github.resilience4j.core.registry.InMemoryRegistryStore;
+import io.github.resilience4j.core.registry.RegistryEventConsumer;
 import org.assertj.core.api.Assertions;
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.BDDAssertions.assertThat;
 
 
-public class BulkheadRegistryTest {
+class BulkheadRegistryTest {
 
     private BulkheadConfig config;
     private BulkheadRegistry registry;
@@ -44,8 +52,8 @@ public class BulkheadRegistryTest {
             : Optional.empty();
     }
 
-    @Before
-    public void setUp() {
+    @BeforeEach
+    void setUp() {
         registry = BulkheadRegistry.ofDefaults();
         config = BulkheadConfig.custom()
             .maxConcurrentCalls(100)
@@ -54,14 +62,14 @@ public class BulkheadRegistryTest {
     }
 
     @Test
-    public void shouldInitRegistryTags() {
-        BulkheadRegistry registry = BulkheadRegistry.of(config,io.vavr.collection.HashMap.of("Tag1Key","Tag1Value"));
+    void shouldInitRegistryTags() {
+        BulkheadRegistry registry = BulkheadRegistry.of(config,Map.of("Tag1Key","Tag1Value"));
         assertThat(registry.getTags()).isNotEmpty();
-        assertThat(registry.getTags()).containsOnly(Tuple.of("Tag1Key","Tag1Value"));
+        assertThat(registry.getTags()).containsOnly(Map.entry("Tag1Key","Tag1Value"));
     }
 
     @Test
-    public void shouldReturnCustomConfig() {
+    void shouldReturnCustomConfig() {
         BulkheadRegistry registry = BulkheadRegistry.of(config);
 
         BulkheadConfig bulkheadConfig = registry.getDefaultConfig();
@@ -70,7 +78,7 @@ public class BulkheadRegistryTest {
     }
 
     @Test
-    public void shouldReturnTheCorrectName() {
+    void shouldReturnTheCorrectName() {
         Bulkhead bulkhead = registry.bulkhead("test");
 
         assertThat(bulkhead).isNotNull();
@@ -80,7 +88,7 @@ public class BulkheadRegistryTest {
     }
 
     @Test
-    public void shouldBeTheSameInstance() {
+    void shouldBeTheSameInstance() {
         Bulkhead bulkhead1 = registry.bulkhead("test", config);
         Bulkhead bulkhead2 = registry.bulkhead("test", config);
 
@@ -89,7 +97,7 @@ public class BulkheadRegistryTest {
     }
 
     @Test
-    public void shouldBeNotTheSameInstance() {
+    void shouldBeNotTheSameInstance() {
         Bulkhead bulkhead1 = registry.bulkhead("test1");
         Bulkhead bulkhead2 = registry.bulkhead("test2");
 
@@ -98,66 +106,59 @@ public class BulkheadRegistryTest {
     }
 
     @Test
-    public void noTagsByDefault() {
+    void noTagsByDefault() {
         Bulkhead retry = registry.bulkhead("testName");
-        assertThat(retry.getTags()).hasSize(0);
+        assertThat(retry.getTags()).isEmpty();
     }
 
     @Test
-    public void tagsOfRegistryAddedToInstance() {
+    void tagsOfRegistryAddedToInstance() {
         BulkheadConfig bulkheadConfig = BulkheadConfig.ofDefaults();
         Map<String, BulkheadConfig> bulkheadConfigs = Collections
             .singletonMap("default", bulkheadConfig);
-        io.vavr.collection.Map<String, String> bulkheadTags = io.vavr.collection.HashMap
-            .of("key1", "value1", "key2", "value2");
+        Map<String, String> bulkheadTags = Map.of("key1", "value1", "key2", "value2");
         BulkheadRegistry bulkheadRegistry = BulkheadRegistry.of(bulkheadConfigs, bulkheadTags);
         Bulkhead bulkhead = bulkheadRegistry.bulkhead("testName");
 
-        assertThat(bulkhead.getTags()).containsOnlyElementsOf(bulkheadTags);
+        assertThat(bulkhead.getTags()).containsAllEntriesOf(bulkheadTags);
     }
 
     @Test
-    public void tagsAddedToInstance() {
-        io.vavr.collection.Map<String, String> bulkheadTags = io.vavr.collection.HashMap
-            .of("key1", "value1", "key2", "value2");
+    void tagsAddedToInstance() {
+        Map<String, String> bulkheadTags = Map.of("key1", "value1", "key2", "value2");
         Bulkhead bulkhead = registry.bulkhead("testName", bulkheadTags);
 
-        assertThat(bulkhead.getTags()).containsOnlyElementsOf(bulkheadTags);
+        assertThat(bulkhead.getTags()).containsAllEntriesOf(bulkheadTags);
     }
 
     @Test
-    public void tagsOfRetriesShouldNotBeMixed() {
+    void tagsOfRetriesShouldNotBeMixed() {
         BulkheadConfig config = BulkheadConfig.ofDefaults();
-        io.vavr.collection.Map<String, String> bulkheadTags = io.vavr.collection.HashMap
-            .of("key1", "value1", "key2", "value2");
+        Map<String, String> bulkheadTags = Map.of("key1", "value1", "key2", "value2");
         Bulkhead bulkhead = registry.bulkhead("testName", config, bulkheadTags);
-        io.vavr.collection.Map<String, String> bulkheadTags2 = io.vavr.collection.HashMap
-            .of("key3", "value3", "key4", "value4");
+        Map<String, String> bulkheadTags2 = Map.of("key3", "value3", "key4", "value4");
         Bulkhead bulkhead2 = registry.bulkhead("otherTestName", config, bulkheadTags2);
 
-        Assertions.assertThat(bulkhead.getTags()).containsOnlyElementsOf(bulkheadTags);
-        Assertions.assertThat(bulkhead2.getTags()).containsOnlyElementsOf(bulkheadTags2);
+        Assertions.assertThat(bulkhead.getTags()).containsAllEntriesOf(bulkheadTags);
+        Assertions.assertThat(bulkhead2.getTags()).containsAllEntriesOf(bulkheadTags2);
     }
 
     @Test
-    public void tagsOfInstanceTagsShouldOverrideRegistryTags() {
+    void tagsOfInstanceTagsShouldOverrideRegistryTags() {
         BulkheadConfig bulkheadConfig = BulkheadConfig.ofDefaults();
         Map<String, BulkheadConfig> bulkheadConfigs = Collections
             .singletonMap("default", bulkheadConfig);
-        io.vavr.collection.Map<String, String> registryTags = io.vavr.collection.HashMap
-            .of("key1", "value1", "key2", "value2");
-        io.vavr.collection.Map<String, String> instanceTags = io.vavr.collection.HashMap
-            .of("key1", "value3", "key4", "value4");
+        Map<String, String> registryTags = Map.of("key1", "value1", "key2", "value2");
+        Map<String, String> instanceTags = Map.of("key1", "value3", "key4", "value4");
         BulkheadRegistry bulkheadRegistry = BulkheadRegistry.of(bulkheadConfigs, registryTags);
         Bulkhead retry = bulkheadRegistry.bulkhead("testName", bulkheadConfig, instanceTags);
 
-        io.vavr.collection.Map<String, String> expectedTags = io.vavr.collection.HashMap
-            .of("key1", "value3", "key2", "value2", "key4", "value4");
-        Assertions.assertThat(retry.getTags()).containsOnlyElementsOf(expectedTags);
+        Map<String, String> expectedTags = Map.of("key1", "value3", "key2", "value2", "key4", "value4");
+        Assertions.assertThat(retry.getTags()).containsAllEntriesOf(expectedTags);
     }
 
     @Test
-    public void testCreateWithConfigurationMap() {
+    void createWithConfigurationMap() {
         Map<String, BulkheadConfig> configs = new HashMap<>();
         configs.put("default", BulkheadConfig.ofDefaults());
         configs.put("custom", BulkheadConfig.ofDefaults());
@@ -169,7 +170,7 @@ public class BulkheadRegistryTest {
     }
 
     @Test
-    public void testCreateWithConfigurationMapWithoutDefaultConfig() {
+    void createWithConfigurationMapWithoutDefaultConfig() {
         Map<String, BulkheadConfig> configs = new HashMap<>();
         configs.put("custom", BulkheadConfig.ofDefaults());
 
@@ -180,7 +181,7 @@ public class BulkheadRegistryTest {
     }
 
     @Test
-    public void testCreateWithSingleRegistryEventConsumer() {
+    void createWithSingleRegistryEventConsumer() {
         BulkheadRegistry bulkheadRegistry = BulkheadRegistry
             .of(BulkheadConfig.ofDefaults(), new NoOpBulkheadEventConsumer());
 
@@ -189,7 +190,7 @@ public class BulkheadRegistryTest {
     }
 
     @Test
-    public void testCreateWithMultipleRegistryEventConsumer() {
+    void createWithMultipleRegistryEventConsumer() {
         List<RegistryEventConsumer<Bulkhead>> registryEventConsumers = new ArrayList<>();
         registryEventConsumers.add(new NoOpBulkheadEventConsumer());
         registryEventConsumers.add(new NoOpBulkheadEventConsumer());
@@ -202,7 +203,7 @@ public class BulkheadRegistryTest {
     }
 
     @Test
-    public void testCreateWithConfigurationMapWithSingleRegistryEventConsumer() {
+    void createWithConfigurationMapWithSingleRegistryEventConsumer() {
         Map<String, BulkheadConfig> configs = new HashMap<>();
         configs.put("custom", BulkheadConfig.ofDefaults());
 
@@ -214,7 +215,7 @@ public class BulkheadRegistryTest {
     }
 
     @Test
-    public void testCreateWithConfigurationMapWithMultiRegistryEventConsumer() {
+    void createWithConfigurationMapWithMultiRegistryEventConsumer() {
         Map<String, BulkheadConfig> configs = new HashMap<>();
         configs.put("custom", BulkheadConfig.ofDefaults());
 
@@ -229,7 +230,7 @@ public class BulkheadRegistryTest {
     }
 
     @Test
-    public void testAddConfiguration() {
+    void addConfiguration() {
         BulkheadRegistry bulkheadRegistry = BulkheadRegistry.ofDefaults();
         bulkheadRegistry.addConfiguration("custom", BulkheadConfig.custom().build());
 
@@ -253,7 +254,7 @@ public class BulkheadRegistryTest {
     }
 
     @Test
-    public void testCreateUsingBuilderWithDefaultConfig() {
+    void createUsingBuilderWithDefaultConfig() {
         BulkheadRegistry bulkheadRegistry =
             BulkheadRegistry.custom().withBulkheadConfig(BulkheadConfig.ofDefaults()).build();
         Bulkhead bulkhead = bulkheadRegistry.bulkhead("testName");
@@ -264,7 +265,7 @@ public class BulkheadRegistryTest {
     }
 
     @Test
-    public void testCreateUsingBuilderWithCustomConfig() {
+    void createUsingBuilderWithCustomConfig() {
         int maxConcurrentCalls = 100;
         BulkheadConfig bulkheadConfig = BulkheadConfig.custom()
             .maxConcurrentCalls(maxConcurrentCalls).build();
@@ -278,7 +279,7 @@ public class BulkheadRegistryTest {
     }
 
     @Test
-    public void testCreateUsingBuilderWithoutDefaultConfig() {
+    void createUsingBuilderWithoutDefaultConfig() {
         int maxConcurrentCalls = 100;
         BulkheadConfig bulkheadConfig = BulkheadConfig.custom()
             .maxConcurrentCalls(maxConcurrentCalls).build();
@@ -289,7 +290,7 @@ public class BulkheadRegistryTest {
         assertThat(bulkheadRegistry.getDefaultConfig()).isNotNull();
         assertThat(bulkheadRegistry.getDefaultConfig().getMaxConcurrentCalls())
             .isEqualTo(25);
-        assertThat(bulkheadRegistry.getConfiguration("someSharedConfig")).isNotEmpty();
+        assertThat(bulkheadRegistry.getConfiguration("someSharedConfig")).isPresent();
 
         Bulkhead bulkhead = bulkheadRegistry
             .bulkhead("name", "someSharedConfig");
@@ -299,15 +300,16 @@ public class BulkheadRegistryTest {
             .isEqualTo(maxConcurrentCalls);
     }
 
-    @Test(expected = IllegalArgumentException.class)
-    public void testAddMultipleDefaultConfigUsingBuilderShouldThrowException() {
+    @Test
+    void addMultipleDefaultConfigUsingBuilderShouldThrowException() {
         BulkheadConfig bulkheadConfig = BulkheadConfig.custom()
             .maxConcurrentCalls(100).build();
-        BulkheadRegistry.custom().addBulkheadConfig("default", bulkheadConfig).build();
+        assertThatThrownBy(() -> BulkheadRegistry.custom().addBulkheadConfig("default", bulkheadConfig).build())
+            .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
-    public void testCreateUsingBuilderWithDefaultAndCustomConfig() {
+    void createUsingBuilderWithDefaultAndCustomConfig() {
         BulkheadConfig bulkheadConfig = BulkheadConfig.custom()
             .maxConcurrentCalls(100).build();
         BulkheadConfig customBulkheadConfig = BulkheadConfig.custom()
@@ -321,18 +323,18 @@ public class BulkheadRegistryTest {
         assertThat(bulkheadRegistry.getDefaultConfig()).isNotNull();
         assertThat(bulkheadRegistry.getDefaultConfig().getMaxConcurrentCalls())
             .isEqualTo(100);
-        assertThat(bulkheadRegistry.getConfiguration("custom")).isNotEmpty();
+        assertThat(bulkheadRegistry.getConfiguration("custom")).isPresent();
     }
 
     @Test
-    public void testCreateUsingBuilderWithNullConfig() {
+    void createUsingBuilderWithNullConfig() {
         assertThatThrownBy(
             () -> BulkheadRegistry.custom().withBulkheadConfig(null).build())
             .isInstanceOf(NullPointerException.class).hasMessage("Config must not be null");
     }
 
     @Test
-    public void testCreateUsingBuilderWithMultipleRegistryEventConsumer() {
+    void createUsingBuilderWithMultipleRegistryEventConsumer() {
         BulkheadRegistry bulkheadRegistry = BulkheadRegistry.custom()
             .withBulkheadConfig(BulkheadConfig.ofDefaults())
             .addRegistryEventConsumer(new NoOpBulkheadEventConsumer())
@@ -344,8 +346,8 @@ public class BulkheadRegistryTest {
     }
 
     @Test
-    public void testCreateUsingBuilderWithRegistryTags() {
-        io.vavr.collection.Map<String, String> bulkheadTags = io.vavr.collection.HashMap
+    void createUsingBuilderWithRegistryTags() {
+        Map<String, String> bulkheadTags = Map
             .of("key1", "value1", "key2", "value2");
         BulkheadRegistry bulkheadRegistry = BulkheadRegistry.custom()
             .withBulkheadConfig(BulkheadConfig.ofDefaults())
@@ -353,11 +355,11 @@ public class BulkheadRegistryTest {
             .build();
         Bulkhead bulkhead = bulkheadRegistry.bulkhead("testName");
 
-        assertThat(bulkhead.getTags()).containsOnlyElementsOf(bulkheadTags);
+        assertThat(bulkhead.getTags()).containsAllEntriesOf(bulkheadTags);
     }
 
     @Test
-    public void testCreateUsingBuilderWithRegistryStore() {
+    void createUsingBuilderWithRegistryStore() {
         BulkheadRegistry bulkheadRegistry = BulkheadRegistry.custom()
             .withBulkheadConfig(BulkheadConfig.ofDefaults())
             .withRegistryStore(new InMemoryRegistryStore<>())

@@ -1,6 +1,6 @@
 /*
  *
- * Copyright 2020
+ * Copyright 2026
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -16,46 +16,52 @@
  */
 package io.github.resilience4j.feign;
 
-import com.github.tomakehurst.wiremock.junit.WireMockRule;
+import com.github.tomakehurst.wiremock.junit5.WireMockRuntimeInfo;
+import com.github.tomakehurst.wiremock.junit5.WireMockTest;
+import feign.Feign;
 import feign.FeignException;
 import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
 import io.github.resilience4j.feign.test.TestService;
-import org.junit.Before;
-import org.junit.Rule;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
 
-import static com.github.tomakehurst.wiremock.client.WireMock.*;
+import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
+import static com.github.tomakehurst.wiremock.client.WireMock.get;
+import static com.github.tomakehurst.wiremock.client.WireMock.getRequestedFor;
+import static com.github.tomakehurst.wiremock.client.WireMock.stubFor;
+import static com.github.tomakehurst.wiremock.client.WireMock.urlPathEqualTo;
+import static com.github.tomakehurst.wiremock.client.WireMock.verify;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Tests the integration of the {@link Resilience4jFeign} with {@link CircuitBreaker}
  */
-public class Resilience4jFeignCircuitBreakerTest {
+@WireMockTest
+class Resilience4jFeignCircuitBreakerTest {
 
     private static final CircuitBreakerConfig circuitBreakerConfig = CircuitBreakerConfig.custom()
         .slidingWindowSize(3)
         .waitDurationInOpenState(Duration.ofMillis(1000))
         .build();
-    @Rule
-    public WireMockRule wireMockRule = new WireMockRule();
     private CircuitBreaker circuitBreaker;
     private TestService testService;
 
-    @Before
-    public void setUp() {
+    @BeforeEach
+    void setUp(WireMockRuntimeInfo wmRuntimeInfo) {
         circuitBreaker = CircuitBreaker.of("test", circuitBreakerConfig);
         final FeignDecorators decorators = FeignDecorators.builder()
             .withCircuitBreaker(circuitBreaker).build();
-        testService = Resilience4jFeign.builder(decorators)
-            .target(TestService.class, "http://localhost:8080/");
+        testService = Feign.builder()
+            .addCapability(Resilience4jFeign.capability(decorators))
+            .target(TestService.class, wmRuntimeInfo.getHttpBaseUrl() + "/");
     }
 
     @Test
-    public void testSuccessfulCall() throws Exception {
+    void successfulCall() throws Exception {
         final CircuitBreaker.Metrics metrics = circuitBreaker.getMetrics();
 
         setupStub(200);
@@ -64,12 +70,11 @@ public class Resilience4jFeignCircuitBreakerTest {
 
         verify(1, getRequestedFor(urlPathEqualTo("/greeting")));
         assertThat(metrics.getNumberOfSuccessfulCalls())
-            .describedAs("Successful Calls")
-            .isEqualTo(1);
+            .describedAs("Successful Calls").isOne();
     }
 
     @Test
-    public void testSuccessfulCallWithDefaultMethod() throws Exception {
+    void successfulCallWithDefaultMethod() throws Exception {
         final CircuitBreaker.Metrics metrics = circuitBreaker.getMetrics();
 
         setupStub(200);
@@ -78,12 +83,11 @@ public class Resilience4jFeignCircuitBreakerTest {
 
         verify(1, getRequestedFor(urlPathEqualTo("/greeting")));
         assertThat(metrics.getNumberOfSuccessfulCalls())
-            .describedAs("Successful Calls")
-            .isEqualTo(1);
+            .describedAs("Successful Calls").isOne();
     }
 
     @Test
-    public void testFailedCall() throws Exception {
+    void failedCall() throws Exception {
         final CircuitBreaker.Metrics metrics = circuitBreaker.getMetrics();
         boolean exceptionThrown = false;
 
@@ -100,11 +104,11 @@ public class Resilience4jFeignCircuitBreakerTest {
             .isTrue();
         assertThat(metrics.getNumberOfFailedCalls())
             .describedAs("Successful Calls")
-            .isEqualTo(1);
+            .isOne();
     }
 
     @Test
-    public void testCircuitBreakerOpen() throws Exception {
+    void circuitBreakerOpen() throws Exception {
         boolean exceptionThrown = false;
         final int threshold = circuitBreaker
             .getCircuitBreakerConfig()
@@ -132,7 +136,7 @@ public class Resilience4jFeignCircuitBreakerTest {
 
 
     @Test
-    public void testCircuitBreakerClosed() throws Exception {
+    void circuitBreakerClosed() throws Exception {
         boolean exceptionThrown = false;
         final int threshold = circuitBreaker
             .getCircuitBreakerConfig()

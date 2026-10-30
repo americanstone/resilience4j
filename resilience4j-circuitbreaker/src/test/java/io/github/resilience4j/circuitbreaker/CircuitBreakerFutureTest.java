@@ -1,26 +1,50 @@
+/*
+ *
+ * Copyright 2026
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
+ * in compliance with the License. You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software distributed under the License
+ * is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
+ * or implied. See the License for the specific language governing permissions and limitations under
+ * the License.
+ *
+ *
+ */
 package io.github.resilience4j.circuitbreaker;
 
 import io.github.resilience4j.circuitbreaker.CircuitBreaker.CircuitBreakerFuture;
-import org.junit.Test;
 
-import java.util.concurrent.*;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+
+import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.BDDMockito.then;
-import static org.mockito.Mockito.*;
+import static org.mockito.Mockito.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.when;
 
 /**
  * Class CircuitBreakerFutureTest.
  */
-public class CircuitBreakerFutureTest {
+class CircuitBreakerFutureTest {
 
     @Test
-    public void shouldDecorateFutureAndReturnSuccess() throws Exception {
+    void shouldDecorateFutureAndReturnSuccess() throws Exception {
         CircuitBreaker circuitBreaker = CircuitBreaker.ofDefaults("testName");
 
+        @SuppressWarnings("unchecked")
         final Future<String> future = mock(Future.class);
         when(future.get()).thenReturn("Hello World");
 
@@ -30,20 +54,21 @@ public class CircuitBreakerFutureTest {
 
         assertThat(value).isEqualTo("Hello World");
 
-        assertThat(circuitBreaker.getMetrics().getNumberOfBufferedCalls()).isEqualTo(1);
-        assertThat(circuitBreaker.getMetrics().getNumberOfFailedCalls()).isEqualTo(0);
-        assertThat(circuitBreaker.getMetrics().getNumberOfSuccessfulCalls()).isEqualTo(1);
-        assertThat(circuitBreaker.getMetrics().getNumberOfNotPermittedCalls()).isEqualTo(0);
+        assertThat(circuitBreaker.getMetrics().getNumberOfBufferedCalls()).isOne();
+        assertThat(circuitBreaker.getMetrics().getNumberOfFailedCalls()).isZero();
+        assertThat(circuitBreaker.getMetrics().getNumberOfSuccessfulCalls()).isOne();
+        assertThat(circuitBreaker.getMetrics().getNumberOfNotPermittedCalls()).isZero();
         assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.CLOSED);
 
         then(future).should().get();
     }
 
     @Test
-    public void shouldDecorateFutureAndCircuitBreakingLogicApplyOnceOnMultipleFutureEval()
+    void shouldDecorateFutureAndCircuitBreakingLogicApplyOnceOnMultipleFutureEval()
         throws Exception {
         CircuitBreaker circuitBreaker = CircuitBreaker.ofDefaults("testName");
 
+        @SuppressWarnings("unchecked")
         final Future<String> future = mock(Future.class);
         when(future.get()).thenReturn("Hello World");
 
@@ -54,19 +79,20 @@ public class CircuitBreakerFutureTest {
         decoratedFuture.get();
         decoratedFuture.get();
 
-        assertThat(circuitBreaker.getMetrics().getNumberOfBufferedCalls()).isEqualTo(1);
-        assertThat(circuitBreaker.getMetrics().getNumberOfFailedCalls()).isEqualTo(0);
-        assertThat(circuitBreaker.getMetrics().getNumberOfSuccessfulCalls()).isEqualTo(1);
-        assertThat(circuitBreaker.getMetrics().getNumberOfNotPermittedCalls()).isEqualTo(0);
+        assertThat(circuitBreaker.getMetrics().getNumberOfBufferedCalls()).isOne();
+        assertThat(circuitBreaker.getMetrics().getNumberOfFailedCalls()).isZero();
+        assertThat(circuitBreaker.getMetrics().getNumberOfSuccessfulCalls()).isOne();
+        assertThat(circuitBreaker.getMetrics().getNumberOfNotPermittedCalls()).isZero();
         assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.CLOSED);
 
         then(future).should(times(2)).get();
     }
 
     @Test
-    public void shouldDecorateFutureAndThrowExecutionException() throws Exception {
+    void shouldDecorateFutureAndThrowExecutionException() throws Exception {
         CircuitBreaker circuitBreaker = CircuitBreaker.ofDefaults("testName");
 
+        @SuppressWarnings("unchecked")
         final Future<String> future = mock(Future.class);
         when(future.get()).thenThrow(new ExecutionException(new RuntimeException("BAM!")));
 
@@ -78,19 +104,20 @@ public class CircuitBreakerFutureTest {
         assertThat(thrown).isInstanceOf(ExecutionException.class)
             .hasCauseInstanceOf(RuntimeException.class);
 
-        assertThat(circuitBreaker.getMetrics().getNumberOfBufferedCalls()).isEqualTo(1);
-        assertThat(circuitBreaker.getMetrics().getNumberOfFailedCalls()).isEqualTo(1);
-        assertThat(circuitBreaker.getMetrics().getNumberOfSuccessfulCalls()).isEqualTo(0);
-        assertThat(circuitBreaker.getMetrics().getNumberOfNotPermittedCalls()).isEqualTo(0);
+        assertThat(circuitBreaker.getMetrics().getNumberOfBufferedCalls()).isOne();
+        assertThat(circuitBreaker.getMetrics().getNumberOfFailedCalls()).isOne();
+        assertThat(circuitBreaker.getMetrics().getNumberOfSuccessfulCalls()).isZero();
+        assertThat(circuitBreaker.getMetrics().getNumberOfNotPermittedCalls()).isZero();
         assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.CLOSED);
 
         then(future).should().get();
     }
 
     @Test
-    public void shouldDecorateFutureAndThrowTimeoutException() throws Exception {
+    void shouldDecorateFutureAndThrowTimeoutException() throws Exception {
         CircuitBreaker circuitBreaker = CircuitBreaker.ofDefaults("testName");
 
+        @SuppressWarnings("unchecked")
         final Future<String> future = mock(Future.class);
         when(future.get(anyLong(), any(TimeUnit.class))).thenThrow(new TimeoutException());
 
@@ -101,19 +128,20 @@ public class CircuitBreakerFutureTest {
 
         assertThat(thrown).isInstanceOf(TimeoutException.class);
 
-        assertThat(circuitBreaker.getMetrics().getNumberOfBufferedCalls()).isEqualTo(1);
-        assertThat(circuitBreaker.getMetrics().getNumberOfFailedCalls()).isEqualTo(1);
-        assertThat(circuitBreaker.getMetrics().getNumberOfSuccessfulCalls()).isEqualTo(0);
-        assertThat(circuitBreaker.getMetrics().getNumberOfNotPermittedCalls()).isEqualTo(0);
+        assertThat(circuitBreaker.getMetrics().getNumberOfBufferedCalls()).isOne();
+        assertThat(circuitBreaker.getMetrics().getNumberOfFailedCalls()).isOne();
+        assertThat(circuitBreaker.getMetrics().getNumberOfSuccessfulCalls()).isZero();
+        assertThat(circuitBreaker.getMetrics().getNumberOfNotPermittedCalls()).isZero();
         assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.CLOSED);
 
         then(future).should().get(anyLong(), any(TimeUnit.class));
     }
 
     @Test
-    public void shouldDecorateFutureAndCallerRequestCancelled() throws Exception {
+    void shouldDecorateFutureAndCallerRequestCancelled() throws Exception {
         CircuitBreaker circuitBreaker = CircuitBreaker.ofDefaults("testName");
 
+        @SuppressWarnings("unchecked")
         final Future<String> future = mock(Future.class);
         when(future.get()).thenThrow(new CancellationException());
 
@@ -123,19 +151,20 @@ public class CircuitBreakerFutureTest {
 
         assertThat(thrown).isInstanceOf(CancellationException.class);
 
-        assertThat(circuitBreaker.getMetrics().getNumberOfBufferedCalls()).isEqualTo(0);
-        assertThat(circuitBreaker.getMetrics().getNumberOfFailedCalls()).isEqualTo(0);
-        assertThat(circuitBreaker.getMetrics().getNumberOfSuccessfulCalls()).isEqualTo(0);
-        assertThat(circuitBreaker.getMetrics().getNumberOfNotPermittedCalls()).isEqualTo(0);
+        assertThat(circuitBreaker.getMetrics().getNumberOfBufferedCalls()).isZero();
+        assertThat(circuitBreaker.getMetrics().getNumberOfFailedCalls()).isZero();
+        assertThat(circuitBreaker.getMetrics().getNumberOfSuccessfulCalls()).isZero();
+        assertThat(circuitBreaker.getMetrics().getNumberOfNotPermittedCalls()).isZero();
         assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.CLOSED);
 
         then(future).should().get();
     }
 
     @Test
-    public void shouldDecorateFutureAndInterruptedExceptionThrownByTaskThread() throws Exception {
+    void shouldDecorateFutureAndInterruptedExceptionThrownByTaskThread() throws Exception {
         CircuitBreaker circuitBreaker = CircuitBreaker.ofDefaults("testName");
 
+        @SuppressWarnings("unchecked")
         final Future<String> future = mock(Future.class);
         when(future.get(anyLong(), any(TimeUnit.class)))
             .thenThrow(new ExecutionException(new InterruptedException()));
@@ -150,21 +179,22 @@ public class CircuitBreakerFutureTest {
         assertThat(thrown).isInstanceOf(ExecutionException.class)
             .hasCauseInstanceOf(InterruptedException.class);
 
-        assertThat(circuitBreaker.getMetrics().getNumberOfBufferedCalls()).isEqualTo(1);
-        assertThat(circuitBreaker.getMetrics().getNumberOfFailedCalls()).isEqualTo(1);
-        assertThat(circuitBreaker.getMetrics().getNumberOfSuccessfulCalls()).isEqualTo(0);
-        assertThat(circuitBreaker.getMetrics().getNumberOfNotPermittedCalls()).isEqualTo(0);
+        assertThat(circuitBreaker.getMetrics().getNumberOfBufferedCalls()).isOne();
+        assertThat(circuitBreaker.getMetrics().getNumberOfFailedCalls()).isOne();
+        assertThat(circuitBreaker.getMetrics().getNumberOfSuccessfulCalls()).isZero();
+        assertThat(circuitBreaker.getMetrics().getNumberOfNotPermittedCalls()).isZero();
         assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.CLOSED);
 
         then(future).should().get(anyLong(), any(TimeUnit.class));
     }
 
     @Test
-    public void shouldDecorateFutureAndInterruptedExceptionThrownByCallingThread()
+    void shouldDecorateFutureAndInterruptedExceptionThrownByCallingThread()
         throws Exception {
         CircuitBreaker circuitBreaker = CircuitBreaker.ofDefaults("testName");
 
         //long running task
+        @SuppressWarnings("unchecked")
         final Future<String> future = mock(Future.class);
         when(future.get()).thenThrow(new InterruptedException());
 
@@ -177,10 +207,10 @@ public class CircuitBreakerFutureTest {
         // InterruptedException directly.
         assertThat(thrown).isInstanceOf(InterruptedException.class);
 
-        assertThat(circuitBreaker.getMetrics().getNumberOfBufferedCalls()).isEqualTo(0);
-        assertThat(circuitBreaker.getMetrics().getNumberOfFailedCalls()).isEqualTo(0);
-        assertThat(circuitBreaker.getMetrics().getNumberOfSuccessfulCalls()).isEqualTo(0);
-        assertThat(circuitBreaker.getMetrics().getNumberOfNotPermittedCalls()).isEqualTo(0);
+        assertThat(circuitBreaker.getMetrics().getNumberOfBufferedCalls()).isZero();
+        assertThat(circuitBreaker.getMetrics().getNumberOfFailedCalls()).isZero();
+        assertThat(circuitBreaker.getMetrics().getNumberOfSuccessfulCalls()).isZero();
+        assertThat(circuitBreaker.getMetrics().getNumberOfNotPermittedCalls()).isZero();
         assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.CLOSED);
 
         then(future).should().get();

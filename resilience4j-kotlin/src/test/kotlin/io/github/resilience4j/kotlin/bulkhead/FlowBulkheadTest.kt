@@ -29,10 +29,12 @@ import kotlinx.coroutines.flow.single
 import kotlinx.coroutines.flow.toList
 import org.assertj.core.api.Assertions
 import org.assertj.core.api.Assertions.assertThat
-import org.junit.Test
+import org.junit.jupiter.api.Test
+
 import java.time.Duration
 import java.util.concurrent.Phaser
 
+@ExperimentalCoroutinesApi
 class FlowBulkheadTest {
 
     private var permittedEvents = 0
@@ -69,7 +71,7 @@ class FlowBulkheadTest {
                 assertThat(resultList[it]).isEqualTo(it)
             }
             assertThat(permittedEvents).isEqualTo(1)
-            assertThat(rejectedEvents).isEqualTo(0)
+            assertThat(rejectedEvents).isZero()
             assertThat(finishedEvents).isEqualTo(1)
         }
     }
@@ -103,8 +105,8 @@ class FlowBulkheadTest {
             sync.send(1)
 
             assertThat(permittedEvents).isEqualTo(1)
-            assertThat(rejectedEvents).isEqualTo(0)
-            assertThat(finishedEvents).isEqualTo(0)
+            assertThat(rejectedEvents).isZero()
+            assertThat(finishedEvents).isZero()
             assertThat(resultList.size).isEqualTo(1)
             assertThat(resultList[0]).isEqualTo(1)
 
@@ -123,7 +125,7 @@ class FlowBulkheadTest {
 
             assertThat(permittedEvents).isEqualTo(1)
             assertThat(rejectedEvents).isEqualTo(1)
-            assertThat(finishedEvents).isEqualTo(0)
+            assertThat(finishedEvents).isZero()
 
             // allow our first call to complete, and then wait for it
             sync.send(2)
@@ -136,7 +138,7 @@ class FlowBulkheadTest {
             assertThat(resultList.size).isEqualTo(2)
             assertThat(resultList[1]).isEqualTo(2)
             // Then the helloWorldService should not be invoked
-            assertThat(helloWorldService.invocationCounter).isEqualTo(0)
+            assertThat(helloWorldService.invocationCounter).isZero()
         }
     }
 
@@ -167,7 +169,7 @@ class FlowBulkheadTest {
                 assertThat(resultList[it]).isEqualTo(it)
             }
             assertThat(permittedEvents).isEqualTo(1)
-            assertThat(rejectedEvents).isEqualTo(0)
+            assertThat(rejectedEvents).isZero()
             assertThat(finishedEvents).isEqualTo(1)
         }
     }
@@ -205,8 +207,8 @@ class FlowBulkheadTest {
             assertThat(job.isCancelled).isTrue()
             assertThat(flowCompleted).isFalse()
             assertThat(permittedEvents).isEqualTo(1)
-            assertThat(rejectedEvents).isEqualTo(0)
-            assertThat(finishedEvents).isEqualTo(0)
+            assertThat(rejectedEvents).isZero()
+            assertThat(finishedEvents).isZero()
         }
     }
 
@@ -247,8 +249,8 @@ class FlowBulkheadTest {
             assertThat(job.isCancelled).isTrue()
             assertThat(flowCompleted).isFalse()
             assertThat(permittedEvents).isEqualTo(1)
-            assertThat(rejectedEvents).isEqualTo(0)
-            assertThat(finishedEvents).isEqualTo(0)
+            assertThat(rejectedEvents).isZero()
+            assertThat(finishedEvents).isZero()
         }
     }
 }

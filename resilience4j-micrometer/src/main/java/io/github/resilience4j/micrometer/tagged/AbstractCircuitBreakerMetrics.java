@@ -39,14 +39,8 @@ abstract class AbstractCircuitBreakerMetrics extends AbstractMetrics {
         this.names = requireNonNull(names);
     }
 
-    @Deprecated
-    protected AbstractCircuitBreakerMetrics(MetricNames names) {
-        this.names = requireNonNull(names);
-    }
-
     protected void addMetrics(MeterRegistry meterRegistry, CircuitBreaker circuitBreaker) {
-        List<Tag> customTags = mapToTagsList(circuitBreaker.getTags()
-            .toJavaMap());
+        List<Tag> customTags = mapToTagsList(circuitBreaker.getTags());
         registerMetrics(meterRegistry, circuitBreaker, customTags);
     }
 
@@ -68,21 +62,21 @@ abstract class AbstractCircuitBreakerMetrics extends AbstractMetrics {
         }
         idSet.add(Gauge.builder(names.getBufferedCallsMetricName(), circuitBreaker,
             cb -> cb.getMetrics().getNumberOfFailedCalls())
-            .description("The number of buffered failed calls stored in the ring buffer")
+            .description("The number of buffered calls stored in the ring buffer")
             .tag(TagNames.NAME, circuitBreaker.getName())
             .tag(TagNames.KIND, KIND_FAILED)
             .tags(customTags)
             .register(meterRegistry).getId());
         idSet.add(Gauge.builder(names.getBufferedCallsMetricName(), circuitBreaker,
             cb -> cb.getMetrics().getNumberOfSuccessfulCalls())
-            .description("The number of buffered successful calls stored in the ring buffer")
+            .description("The number of buffered calls stored in the ring buffer")
             .tag(TagNames.NAME, circuitBreaker.getName())
             .tag(TagNames.KIND, KIND_SUCCESSFUL)
             .tags(customTags)
             .register(meterRegistry).getId());
         idSet.add(Gauge.builder(names.getSlowCallsMetricName(), circuitBreaker,
             cb -> cb.getMetrics().getNumberOfSlowSuccessfulCalls())
-            .description("The number of slow successful which were slower than a certain threshold")
+            .description("The number of calls which were slower than a certain threshold")
             .tag(TagNames.NAME, circuitBreaker.getName())
             .tag(TagNames.KIND, KIND_SUCCESSFUL)
             .tags(customTags)
@@ -90,7 +84,7 @@ abstract class AbstractCircuitBreakerMetrics extends AbstractMetrics {
         idSet.add(Gauge.builder(names.getSlowCallsMetricName(), circuitBreaker,
             cb -> cb.getMetrics().getNumberOfSlowFailedCalls())
             .description(
-                "The number of slow failed calls which were slower than a certain threshold")
+                "The number of calls which were slower than a certain threshold")
             .tag(TagNames.NAME, circuitBreaker.getName())
             .tag(TagNames.KIND, KIND_FAILED)
             .tags(customTags)
@@ -110,21 +104,21 @@ abstract class AbstractCircuitBreakerMetrics extends AbstractMetrics {
             .register(meterRegistry).getId());
 
         Timer successfulCalls = Timer.builder(names.getCallsMetricName())
-            .description("Total number of successful calls")
+            .description("Total duration of calls")
             .tag(TagNames.NAME, circuitBreaker.getName())
             .tag(TagNames.KIND, KIND_SUCCESSFUL)
             .tags(customTags)
             .register(meterRegistry);
 
         Timer failedCalls = Timer.builder(names.getCallsMetricName())
-            .description("Total number of failed calls")
+            .description("Total duration of calls")
             .tag(TagNames.NAME, circuitBreaker.getName())
             .tag(TagNames.KIND, KIND_FAILED)
             .tags(customTags)
             .register(meterRegistry);
 
         Timer ignoredFailedCalls = Timer.builder(names.getCallsMetricName())
-            .description("Total number of calls which failed but the exception was ignored")
+            .description("Total duration of calls")
             .tag(TagNames.NAME, circuitBreaker.getName())
             .tag(TagNames.KIND, KIND_IGNORED)
             .tags(customTags)
@@ -151,7 +145,4 @@ abstract class AbstractCircuitBreakerMetrics extends AbstractMetrics {
         meterIdMap.put(circuitBreaker.getName(), idSet);
     }
 
-    @Deprecated
-    public static class MetricNames extends CircuitBreakerMetricNames {
-    }
 }

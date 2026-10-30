@@ -16,8 +16,8 @@
 package io.github.resilience4j.micronaut.ratelimiter;
 
 import io.github.resilience4j.common.CompositeCustomizer;
+import io.github.resilience4j.common.ratelimiter.configuration.CommonRateLimiterConfigurationProperties;
 import io.github.resilience4j.common.ratelimiter.configuration.RateLimiterConfigCustomizer;
-import io.github.resilience4j.common.ratelimiter.configuration.RateLimiterConfigurationProperties;
 import io.github.resilience4j.consumer.DefaultEventConsumerRegistry;
 import io.github.resilience4j.consumer.EventConsumerRegistry;
 import io.github.resilience4j.core.registry.CompositeRegistryEventConsumer;
@@ -31,9 +31,9 @@ import io.micronaut.context.annotation.Factory;
 import io.micronaut.context.annotation.Primary;
 import io.micronaut.context.annotation.Requires;
 import io.micronaut.core.util.StringUtils;
+import jakarta.inject.Singleton;
 
 import javax.annotation.Nullable;
-import javax.inject.Singleton;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -94,16 +94,21 @@ public class RateLimiterRegistryFactory {
      */
     private void registerEventConsumer(RateLimiterRegistry rateLimiterRegistry,
                                        EventConsumerRegistry<RateLimiterEvent> eventConsumerRegistry,
-                                       RateLimiterConfigurationProperties rateLimiterConfigurationProperties) {
-        rateLimiterRegistry.getEventPublisher().onEntryAdded(
-            event -> registerEventConsumer(eventConsumerRegistry, event.getAddedEntry(),
-                rateLimiterConfigurationProperties));
+                                       CommonRateLimiterConfigurationProperties rateLimiterConfigurationProperties) {
+        rateLimiterRegistry.getEventPublisher()
+            .onEntryAdded(event -> registerEventConsumer(eventConsumerRegistry, event.getAddedEntry(), rateLimiterConfigurationProperties))
+            .onEntryReplaced(event -> registerEventConsumer(eventConsumerRegistry, event.getNewEntry(), rateLimiterConfigurationProperties))
+            .onEntryRemoved(event -> unregisterEventConsumer(eventConsumerRegistry, event.getRemovedEntry()));
+    }
+
+    private void unregisterEventConsumer(EventConsumerRegistry<RateLimiterEvent> eventConsumerRegistry, RateLimiter rateLimiter) {
+        eventConsumerRegistry.removeEventConsumer(rateLimiter.getName());
     }
 
     private void registerEventConsumer(
         EventConsumerRegistry<RateLimiterEvent> eventConsumerRegistry, RateLimiter rateLimiter,
-        RateLimiterConfigurationProperties rateLimiterConfigurationProperties) {
-        final io.github.resilience4j.common.ratelimiter.configuration.RateLimiterConfigurationProperties.InstanceProperties limiterProperties = rateLimiterConfigurationProperties
+        CommonRateLimiterConfigurationProperties rateLimiterConfigurationProperties) {
+        final io.github.resilience4j.common.ratelimiter.configuration.CommonRateLimiterConfigurationProperties.InstanceProperties limiterProperties = rateLimiterConfigurationProperties
             .getInstances().get(rateLimiter.getName());
         if (limiterProperties != null && limiterProperties.getSubscribeForEvents() != null
             && limiterProperties.getSubscribeForEvents()) {
@@ -124,7 +129,7 @@ public class RateLimiterRegistryFactory {
      * @return a RateLimiterRegistry
      */
     private RateLimiterRegistry createRateLimiterRegistry(
-        RateLimiterConfigurationProperties rateLimiterConfigurationProperties,
+        CommonRateLimiterConfigurationProperties rateLimiterConfigurationProperties,
         RegistryEventConsumer<RateLimiter> rateLimiterRegistryEventConsumer,
         CompositeCustomizer<RateLimiterConfigCustomizer> compositeRateLimiterCustomizer) {
 
@@ -134,8 +139,7 @@ public class RateLimiterRegistryFactory {
                     .createRateLimiterConfig(entry.getValue(), compositeRateLimiterCustomizer,
                         entry.getKey())));
 
-        return RateLimiterRegistry.of(configs, rateLimiterRegistryEventConsumer,
-            io.vavr.collection.HashMap.ofAll(rateLimiterConfigurationProperties.getTags()));
+        return RateLimiterRegistry.of(configs, rateLimiterRegistryEventConsumer, rateLimiterConfigurationProperties.getTags());
     }
 
 }

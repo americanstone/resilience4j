@@ -15,11 +15,13 @@
  */
 package io.github.resilience4j.common.utils;
 
-import io.github.resilience4j.common.bulkhead.configuration.BulkheadConfigurationProperties;
-import io.github.resilience4j.common.circuitbreaker.configuration.CircuitBreakerConfigurationProperties;
-import io.github.resilience4j.common.ratelimiter.configuration.RateLimiterConfigurationProperties;
-import io.github.resilience4j.common.retry.configuration.RetryConfigurationProperties;
-import io.github.resilience4j.common.timelimiter.configuration.TimeLimiterConfigurationProperties;
+import io.github.resilience4j.common.bulkhead.configuration.CommonBulkheadConfigurationProperties;
+import io.github.resilience4j.common.bulkhead.configuration.CommonThreadPoolBulkheadConfigurationProperties;
+import io.github.resilience4j.common.circuitbreaker.configuration.CommonCircuitBreakerConfigurationProperties;
+import io.github.resilience4j.common.micrometer.configuration.CommonTimerConfigurationProperties;
+import io.github.resilience4j.common.ratelimiter.configuration.CommonRateLimiterConfigurationProperties;
+import io.github.resilience4j.common.retry.configuration.CommonRetryConfigurationProperties;
+import io.github.resilience4j.common.timelimiter.configuration.CommonTimeLimiterConfigurationProperties;
 
 /**
  * resilience4j configuration util
@@ -36,8 +38,8 @@ public class ConfigUtils {
      * @param instanceProperties instance properties
      */
     public static void mergePropertiesIfAny(
-        CircuitBreakerConfigurationProperties.InstanceProperties instanceProperties,
-        CircuitBreakerConfigurationProperties.InstanceProperties baseProperties) {
+        CommonCircuitBreakerConfigurationProperties.InstanceProperties instanceProperties,
+        CommonCircuitBreakerConfigurationProperties.InstanceProperties baseProperties) {
         if (instanceProperties.getRegisterHealthIndicator() == null &&
             baseProperties.getRegisterHealthIndicator() != null) {
             instanceProperties.setRegisterHealthIndicator(baseProperties.getRegisterHealthIndicator());
@@ -50,6 +52,10 @@ public class ConfigUtils {
             baseProperties.getEventConsumerBufferSize() != null) {
             instanceProperties.setEventConsumerBufferSize(baseProperties.getEventConsumerBufferSize());
         }
+        if (instanceProperties.getIgnoreClassBindingExceptions() == null &&
+            baseProperties.getIgnoreClassBindingExceptions() != null) {
+            instanceProperties.setIgnoreClassBindingExceptions(baseProperties.getIgnoreClassBindingExceptions());
+        }
     }
 
     /**
@@ -59,8 +65,8 @@ public class ConfigUtils {
      * @param instanceProperties instance properties
      */
     public static void mergePropertiesIfAny(
-        BulkheadConfigurationProperties.InstanceProperties baseProperties,
-        BulkheadConfigurationProperties.InstanceProperties instanceProperties) {
+        CommonBulkheadConfigurationProperties.InstanceProperties baseProperties,
+        CommonBulkheadConfigurationProperties.InstanceProperties instanceProperties) {
         if (instanceProperties.getEventConsumerBufferSize() == null &&
             baseProperties.getEventConsumerBufferSize() != null) {
                 instanceProperties.setEventConsumerBufferSize(baseProperties.getEventConsumerBufferSize());
@@ -74,8 +80,23 @@ public class ConfigUtils {
      * @param instanceProperties instance properties
      */
     public static void mergePropertiesIfAny(
-        RateLimiterConfigurationProperties.InstanceProperties baseProperties,
-        RateLimiterConfigurationProperties.InstanceProperties instanceProperties) {
+        CommonThreadPoolBulkheadConfigurationProperties.InstanceProperties baseProperties,
+        CommonThreadPoolBulkheadConfigurationProperties.InstanceProperties instanceProperties) {
+        if (instanceProperties.getEventConsumerBufferSize() == null &&
+            baseProperties.getEventConsumerBufferSize() != null) {
+                instanceProperties.setEventConsumerBufferSize(baseProperties.getEventConsumerBufferSize());
+        }
+    }
+
+    /**
+     * merge only properties that are not part of retry config if any match the conditions of merge
+     *
+     * @param baseProperties     base config properties
+     * @param instanceProperties instance properties
+     */
+    public static void mergePropertiesIfAny(
+        CommonRateLimiterConfigurationProperties.InstanceProperties baseProperties,
+        CommonRateLimiterConfigurationProperties.InstanceProperties instanceProperties) {
         if (instanceProperties.getRegisterHealthIndicator() == null &&
             baseProperties.getRegisterHealthIndicator() != null) {
             instanceProperties.setRegisterHealthIndicator(baseProperties.getRegisterHealthIndicator());
@@ -101,8 +122,8 @@ public class ConfigUtils {
      * @param instanceProperties instance properties
      */
     public static void mergePropertiesIfAny(
-        RetryConfigurationProperties.InstanceProperties baseProperties,
-        RetryConfigurationProperties.InstanceProperties instanceProperties) {
+        CommonRetryConfigurationProperties.InstanceProperties baseProperties,
+        CommonRetryConfigurationProperties.InstanceProperties instanceProperties) {
         if (instanceProperties.getEnableExponentialBackoff() == null &&
             baseProperties.getEnableExponentialBackoff() != null) {
             instanceProperties.setEnableExponentialBackoff(baseProperties.getEnableExponentialBackoff());
@@ -119,6 +140,10 @@ public class ConfigUtils {
             baseProperties.getExponentialMaxWaitDuration() != null) {
             instanceProperties.setExponentialMaxWaitDuration(baseProperties.getExponentialMaxWaitDuration());
         }
+        if (instanceProperties.getEventConsumerBufferSize() == null &&
+            baseProperties.getEventConsumerBufferSize() != null) {
+            instanceProperties.setEventConsumerBufferSize(baseProperties.getEventConsumerBufferSize());
+        }
     }
 
 	/**
@@ -127,12 +152,25 @@ public class ConfigUtils {
 	 * @param baseProperties     base config properties
 	 * @param instanceProperties instance properties
 	 */
-	public static void mergePropertiesIfAny(TimeLimiterConfigurationProperties.InstanceProperties baseProperties,
-											TimeLimiterConfigurationProperties.InstanceProperties instanceProperties) {
+	public static void mergePropertiesIfAny(CommonTimeLimiterConfigurationProperties.InstanceProperties baseProperties,
+											CommonTimeLimiterConfigurationProperties.InstanceProperties instanceProperties) {
 		if (instanceProperties.getEventConsumerBufferSize() == null
             && baseProperties.getEventConsumerBufferSize() != null) {
             instanceProperties.setEventConsumerBufferSize(baseProperties.getEventConsumerBufferSize());
 		}
 	}
 
+    /**
+	 * merge only properties that are not part of timer config if any match the conditions of merge
+	 *
+	 * @param baseProperties     base config properties
+	 * @param instanceProperties instance properties
+	 */
+	public static void mergePropertiesIfAny(CommonTimerConfigurationProperties.InstanceProperties baseProperties,
+                                            CommonTimerConfigurationProperties.InstanceProperties instanceProperties) {
+		if (instanceProperties.getEventConsumerBufferSize() == null
+            && baseProperties.getEventConsumerBufferSize() != null) {
+            instanceProperties.setEventConsumerBufferSize(baseProperties.getEventConsumerBufferSize());
+		}
+	}
 }

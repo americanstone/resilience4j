@@ -15,13 +15,15 @@
  */
 package io.github.resilience4j.micronaut.circuitbreaker;
 
+import io.github.resilience4j.bulkhead.Bulkhead;
+import io.github.resilience4j.bulkhead.event.BulkheadEvent;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import io.github.resilience4j.circuitbreaker.event.CircuitBreakerEvent;
 import io.github.resilience4j.common.CompositeCustomizer;
 import io.github.resilience4j.common.circuitbreaker.configuration.CircuitBreakerConfigCustomizer;
-import io.github.resilience4j.common.circuitbreaker.configuration.CircuitBreakerConfigurationProperties;
+import io.github.resilience4j.common.circuitbreaker.configuration.CommonCircuitBreakerConfigurationProperties;
 import io.github.resilience4j.consumer.DefaultEventConsumerRegistry;
 import io.github.resilience4j.consumer.EventConsumerRegistry;
 import io.github.resilience4j.core.registry.CompositeRegistryEventConsumer;
@@ -31,9 +33,9 @@ import io.micronaut.context.annotation.Factory;
 import io.micronaut.context.annotation.Primary;
 import io.micronaut.context.annotation.Requires;
 import io.micronaut.core.util.StringUtils;
+import jakarta.inject.Singleton;
 
 import javax.annotation.Nullable;
-import javax.inject.Singleton;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -53,7 +55,7 @@ public class CircuitBreakerRegistryFactory {
     @Singleton
     @Requires(beans = CircuitBreakerProperties.class)
     public CircuitBreakerRegistry circuitBreakerRegistry(
-        CircuitBreakerConfigurationProperties circuitBreakerConfigurationProperties,
+        CommonCircuitBreakerConfigurationProperties circuitBreakerConfigurationProperties,
         @CircuitBreakerQualifier EventConsumerRegistry<CircuitBreakerEvent> eventConsumerRegistry,
         @CircuitBreakerQualifier RegistryEventConsumer<CircuitBreaker> circuitBreakerRegistryEventConsumer,
         @CircuitBreakerQualifier CompositeCustomizer<CircuitBreakerConfigCustomizer> compositeCircuitBreakerCustomizer) {
@@ -90,7 +92,7 @@ public class CircuitBreakerRegistryFactory {
      * @param circuitBreakerRegistry The circuit breaker registry.
      * @param customizerMap
      */
-    private void initCircuitBreakerRegistry(CircuitBreakerConfigurationProperties circuitBreakerConfigurationProperties,
+    private void initCircuitBreakerRegistry(CommonCircuitBreakerConfigurationProperties circuitBreakerConfigurationProperties,
                                     CircuitBreakerRegistry circuitBreakerRegistry,
                                     CompositeCustomizer<CircuitBreakerConfigCustomizer> customizerMap) {
         circuitBreakerConfigurationProperties.getInstances().forEach(
@@ -108,7 +110,7 @@ public class CircuitBreakerRegistryFactory {
      * @return a CircuitBreakerRegistry
      */
     CircuitBreakerRegistry createCircuitBreakerRegistry(
-        CircuitBreakerConfigurationProperties circuitBreakerProperties,
+        CommonCircuitBreakerConfigurationProperties circuitBreakerProperties,
         RegistryEventConsumer<CircuitBreaker> circuitBreakerRegistryEventConsumer,
         CompositeCustomizer<CircuitBreakerConfigCustomizer> customizerMap) {
 
@@ -118,8 +120,7 @@ public class CircuitBreakerRegistryFactory {
                     .createCircuitBreakerConfig(entry.getKey(), entry.getValue(),
                         customizerMap)));
 
-        return CircuitBreakerRegistry.of(configs, circuitBreakerRegistryEventConsumer,
-            io.vavr.collection.HashMap.ofAll(circuitBreakerProperties.getTags()));
+        return CircuitBreakerRegistry.of(configs, circuitBreakerRegistryEventConsumer, circuitBreakerProperties.getTags());
     }
 
     /**
@@ -129,20 +130,25 @@ public class CircuitBreakerRegistryFactory {
      * @param circuitBreakerRegistry The circuit breaker registry.
      * @param eventConsumerRegistry  The event consumer registry.
      */
-    public void registerEventConsumer(CircuitBreakerConfigurationProperties circuitBreakerProperties,CircuitBreakerRegistry circuitBreakerRegistry,
+    public void registerEventConsumer(CommonCircuitBreakerConfigurationProperties circuitBreakerProperties,CircuitBreakerRegistry circuitBreakerRegistry,
                                       EventConsumerRegistry<CircuitBreakerEvent> eventConsumerRegistry) {
-        circuitBreakerRegistry.getEventPublisher().onEntryAdded(
-            event -> registerEventConsumer(circuitBreakerProperties, eventConsumerRegistry, event.getAddedEntry()));
+        circuitBreakerRegistry.getEventPublisher()
+            .onEntryAdded(event -> registerEventConsumer(circuitBreakerProperties, eventConsumerRegistry, event.getAddedEntry()))
+            .onEntryReplaced(event -> registerEventConsumer(circuitBreakerProperties, eventConsumerRegistry, event.getNewEntry()))
+            .onEntryRemoved(event -> unregisterEventConsumer(eventConsumerRegistry, event.getRemovedEntry()));
     }
 
+    private void unregisterEventConsumer(EventConsumerRegistry<CircuitBreakerEvent> eventConsumerRegistry, CircuitBreaker circuitBreaker) {
+        eventConsumerRegistry.removeEventConsumer(circuitBreaker.getName());
+    }
 
-    private void registerEventConsumer( CircuitBreakerConfigurationProperties circuitBreakerRegistry,
+    private void registerEventConsumer( CommonCircuitBreakerConfigurationProperties circuitBreakerRegistry,
         EventConsumerRegistry<CircuitBreakerEvent> eventConsumerRegistry,
         CircuitBreaker circuitBreaker) {
         int eventConsumerBufferSize = circuitBreakerRegistry
             .findCircuitBreakerProperties(circuitBreaker.getName())
             .map(
-                io.github.resilience4j.common.circuitbreaker.configuration.CircuitBreakerConfigurationProperties.InstanceProperties::getEventConsumerBufferSize)
+                io.github.resilience4j.common.circuitbreaker.configuration.CommonCircuitBreakerConfigurationProperties.InstanceProperties::getEventConsumerBufferSize)
             .orElse(100);
         circuitBreaker.getEventPublisher().onEvent(eventConsumerRegistry
             .createEventConsumer(circuitBreaker.getName(), eventConsumerBufferSize));

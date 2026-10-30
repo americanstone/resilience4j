@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright 2016 Robert Winkler
+ *  Copyright 2026: Robert Winkler
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -18,39 +18,43 @@
  */
 package io.github.resilience4j.retry.internal;
 
+import io.github.resilience4j.core.functions.CheckedRunnable;
+import io.github.resilience4j.retry.MaxRetriesExceededException;
 import io.github.resilience4j.retry.Retry;
 import io.github.resilience4j.retry.RetryConfig;
 import io.github.resilience4j.retry.event.RetryEvent;
 import io.github.resilience4j.test.HelloWorldException;
 import io.github.resilience4j.test.HelloWorldService;
 import io.reactivex.subscribers.TestSubscriber;
-import io.vavr.CheckedRunnable;
 import io.vavr.control.Try;
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.time.Duration;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 
-import static io.github.resilience4j.adapter.RxJava2Adapter.toFlowable;
+import static io.github.resilience4j.test.RxJava2Adapter.toFlowable;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.BDDMockito.then;
-import static org.mockito.BDDMockito.willThrow;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.BDDMockito.*;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 
-public class EventPublisherTest {
+class EventPublisherTest {
 
     private HelloWorldService helloWorldService;
     private long sleptTime = 0L;
 
-    @Before
-    public void setUp() {
+    @BeforeEach
+    void setUp() {
         helloWorldService = mock(HelloWorldService.class);
-        RetryImpl.sleepFunction = sleep -> sleptTime += sleep;
+        RetryImpl.setSleepFunction(sleep -> sleptTime += sleep);
     }
 
     @Test
-    public void shouldReturnAfterThreeAttempts() {
+    void shouldReturnAfterThreeAttempts() {
         willThrow(new HelloWorldException()).given(helloWorldService).sayHelloWorld();
         Retry retry = Retry.ofDefaults("id");
         TestSubscriber<RetryEvent.Type> testSubscriber = toFlowable(retry.getEventPublisher())
@@ -59,7 +63,7 @@ public class EventPublisherTest {
         CheckedRunnable retryableRunnable = Retry
             .decorateCheckedRunnable(retry, helloWorldService::sayHelloWorld);
 
-        Try<Void> result = Try.run(retryableRunnable);
+        Try<Void> result = Try.run(() -> retryableRunnable.run());
 
         then(helloWorldService).should(times(3)).sayHelloWorld();
         assertThat(result.isFailure()).isTrue();
@@ -70,7 +74,37 @@ public class EventPublisherTest {
     }
 
     @Test
-    public void shouldReturnAfterTwoAttempts() {
+    void asyncShouldReturnAfterThreeAttempts() {
+        ScheduledThreadPoolExecutor executor = new ScheduledThreadPoolExecutor(1);
+        String retryMessage = "hello world";
+        willReturn(retryMessage).given(helloWorldService).returnHelloWorld();
+        Retry retry = Retry.of(
+            "hello world retry",
+            RetryConfig
+                .custom()
+                .retryOnResult(result -> result.equals(retryMessage))
+                .waitDuration(Duration.ofMillis(1))
+                .failAfterMaxAttempts(true)
+                .build());
+
+
+        TestSubscriber<RetryEvent.Type> testSubscriber = toFlowable(retry.getEventPublisher())
+            .map(RetryEvent::getEventType)
+            .test();
+
+        CompletableFuture<String> result = retry
+            .executeCompletionStage(executor, () ->
+                CompletableFuture.completedFuture(helloWorldService.returnHelloWorld())).toCompletableFuture();
+
+        assertThatThrownBy(result::get).hasCauseInstanceOf(MaxRetriesExceededException.class);
+
+        then(helloWorldService).should(times(3)).returnHelloWorld();
+        testSubscriber.assertValueCount(3)
+            .assertValues(RetryEvent.Type.RETRY, RetryEvent.Type.RETRY, RetryEvent.Type.ERROR);
+    }
+
+    @Test
+    void shouldReturnAfterTwoAttempts() {
         willThrow(new HelloWorldException()).willDoNothing().given(helloWorldService)
             .sayHelloWorld();
         Retry retry = Retry.ofDefaults("id");
@@ -80,7 +114,7 @@ public class EventPublisherTest {
         CheckedRunnable retryableRunnable = Retry
             .decorateCheckedRunnable(retry, helloWorldService::sayHelloWorld);
 
-        Try<Void> result = Try.run(retryableRunnable);
+        Try<Void> result = Try.run(() -> retryableRunnable.run());
 
         then(helloWorldService).should(times(2)).sayHelloWorld();
         assertThat(result.isSuccess()).isTrue();
@@ -90,7 +124,7 @@ public class EventPublisherTest {
     }
 
     @Test
-    public void shouldIgnoreError() {
+    void shouldIgnoreError() {
         willThrow(new HelloWorldException()).willDoNothing().given(helloWorldService)
             .sayHelloWorld();
         RetryConfig config = RetryConfig.custom()
@@ -103,11 +137,11 @@ public class EventPublisherTest {
         CheckedRunnable retryableRunnable = Retry
             .decorateCheckedRunnable(retry, helloWorldService::sayHelloWorld);
 
-        Try<Void> result = Try.run(retryableRunnable);
+        Try<Void> result = Try.run(() -> retryableRunnable.run());
 
         then(helloWorldService).should().sayHelloWorld();
         assertThat(result.isFailure()).isTrue();
-        assertThat(sleptTime).isEqualTo(0);
+        assertThat(sleptTime).isZero();
         testSubscriber.assertValueCount(1).assertValues(RetryEvent.Type.IGNORED_ERROR);
     }
 }

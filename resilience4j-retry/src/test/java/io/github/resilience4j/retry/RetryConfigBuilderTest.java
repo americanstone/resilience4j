@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright 2016 Robert Winkler
+ *  Copyright 2026 Robert Winkler
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -20,48 +20,52 @@ package io.github.resilience4j.retry;
 
 import io.github.resilience4j.core.IntervalBiFunction;
 import io.github.resilience4j.core.IntervalFunction;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.util.function.BiConsumer;
 import java.util.function.Predicate;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.BDDAssertions.then;
 
-public class RetryConfigBuilderTest {
+class RetryConfigBuilderTest {
 
     private static final Predicate<Throwable> TEST_PREDICATE = e -> "test".equals(e.getMessage());
 
-    @Test(expected = IllegalArgumentException.class)
-    public void zeroMaxAttemptsShouldFail() {
-        RetryConfig.custom().maxAttempts(0).build();
+    @Test
+    void zeroMaxAttemptsShouldFail() {
+        assertThatThrownBy(() -> RetryConfig.custom().maxAttempts(0).build())
+            .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
-    public void zeroWaitInterval() {
+    void zeroWaitInterval() {
         final RetryConfig config = RetryConfig.custom().waitDuration(Duration.ofMillis(0)).build();
-        assertThat(config.getIntervalBiFunction().apply(1, null)).isEqualTo(0);
+        assertThat(config.getIntervalBiFunction().apply(1, null)).isZero();
     }
 
     @Test
-    public void waitIntervalUnderTenMillisShouldSucceed() {
+    void waitIntervalUnderTenMillisShouldSucceed() {
         RetryConfig config = RetryConfig.custom().waitDuration(Duration.ofMillis(5)).build();
         assertThat(config.getIntervalBiFunction().apply(1, null)).isEqualTo(5L);
     }
 
-    @Test(expected = IllegalArgumentException.class)
-    public void waitIntervalUnderZeroShouldFail() {
-        RetryConfig.custom().waitDuration(Duration.ofMillis(-1)).build();
+    @Test
+    void waitIntervalUnderZeroShouldFail() {
+        assertThatThrownBy(() -> RetryConfig.custom().waitDuration(Duration.ofMillis(-1)).build())
+            .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
-    public void waitIntervalOfTenMillisShouldSucceed() {
+    void waitIntervalOfTenMillisShouldSucceed() {
         RetryConfig config = RetryConfig.custom().waitDuration(Duration.ofMillis(10)).build();
         assertThat(config).isNotNull();
     }
 
     @Test
-    public void testCreateFromConfigurationWithNoPredicateCalculations() {
+    void testCreateFromConfigurationWithNoPredicateCalculations() {
         RetryConfig config = RetryConfig
             .from(RetryConfig.custom().retryOnException(e -> e instanceof IllegalArgumentException)
                 .build()).build();
@@ -71,7 +75,7 @@ public class RetryConfigBuilderTest {
     }
 
     @Test
-    public void testCreateFromConfigurationShouldCopyIntervalBiFunction() {
+    void testCreateFromConfigurationShouldCopyIntervalBiFunction() {
         IntervalBiFunction<Object> biFunction = IntervalBiFunction.ofIntervalFunction(IntervalFunction.ofDefaults());
         RetryConfig config = RetryConfig
             .from(RetryConfig.custom()
@@ -83,7 +87,7 @@ public class RetryConfigBuilderTest {
     }
 
     @Test
-    public void testCreateFromConfigurationShouldUseIntervalFunction() {
+    void testCreateFromConfigurationShouldUseIntervalFunction() {
         RetryConfig config = RetryConfig
             .from(RetryConfig.custom()
                 .intervalFunction(IntervalFunction.of(100L))
@@ -94,7 +98,7 @@ public class RetryConfigBuilderTest {
     }
 
     @Test
-    public void testCreateFromDefaultConfigurationShouldUseIntervalFunction() {
+    void testCreateFromDefaultConfigurationShouldUseIntervalFunction() {
         RetryConfig baseConfig = RetryConfig.ofDefaults();
         RetryConfig retryConfig = RetryConfig.from(baseConfig)
             .intervalFunction(IntervalFunction.of(100L))
@@ -106,96 +110,107 @@ public class RetryConfigBuilderTest {
     }
 
     @Test
-    public void waitIntervalOverTenMillisShouldSucceed() {
+    void testConsumeResultBeforeRetryAttemptCanBeConfigured(){
+        BiConsumer<Integer, String> biConsumer = (attempt, resultObject) -> {};
+        RetryConfig.Builder<String> builder = RetryConfig.custom();
+        RetryConfig retryConfig = builder.consumeResultBeforeRetryAttempt(biConsumer).build();
+
+        assertThat(retryConfig).isNotNull();
+        assertThat(retryConfig.getConsumeResultBeforeRetryAttempt()).isNotNull();
+        assertThat(retryConfig.getConsumeResultBeforeRetryAttempt()).isEqualTo(biConsumer);
+    }
+
+    @Test
+    void waitIntervalOverTenMillisShouldSucceed() {
         RetryConfig config = RetryConfig.custom().waitDuration(Duration.ofSeconds(10)).build();
         assertThat(config).isNotNull();
     }
 
     @Test()
-    public void shouldUseIgnoreExceptionToBuildPredicate() {
+    void shouldUseIgnoreExceptionToBuildPredicate() {
         RetryConfig retryConfig = RetryConfig.custom()
             .ignoreExceptions(RuntimeException.class, ExtendsExtendsException.class).build();
         final Predicate<? super Throwable> failurePredicate = retryConfig.getExceptionPredicate();
-        then(failurePredicate.test(new Exception())).isEqualTo(true); // not explicitly excluded
-        then(failurePredicate.test(new ExtendsError())).isEqualTo(true); // not explicitly excluded
+        then(failurePredicate.test(new Exception())).isTrue(); // not explicitly excluded
+        then(failurePredicate.test(new ExtendsError())).isTrue(); // not explicitly excluded
         then(failurePredicate.test(new ExtendsException()))
-            .isEqualTo(true); // not explicitly excluded
+            .isTrue(); // not explicitly excluded
         then(failurePredicate.test(new ExtendsException2()))
-            .isEqualTo(true); // not explicitly excluded
-        then(failurePredicate.test(new RuntimeException())).isEqualTo(false); // explicitly excluded
+            .isTrue(); // not explicitly excluded
+        then(failurePredicate.test(new RuntimeException())).isFalse(); // explicitly excluded
         then(failurePredicate.test(new ExtendsRuntimeException()))
-            .isEqualTo(false); // inherits excluded from ExtendsException
+            .isFalse(); // inherits excluded from ExtendsException
         then(failurePredicate.test(new ExtendsExtendsException()))
-            .isEqualTo(false); // explicitly excluded
+            .isFalse(); // explicitly excluded
     }
 
     @Test()
-    public void shouldUseRecordExceptionToBuildPredicate() {
+    void shouldUseRecordExceptionToBuildPredicate() {
         RetryConfig retryConfig = RetryConfig.custom()
             .retryExceptions(RuntimeException.class, ExtendsExtendsException.class).build();
         final Predicate<? super Throwable> failurePredicate = retryConfig.getExceptionPredicate();
-        then(failurePredicate.test(new Exception())).isEqualTo(false); // not explicitly included
-        then(failurePredicate.test(new ExtendsError())).isEqualTo(false); // not explicitly included
+        then(failurePredicate.test(new Exception())).isFalse(); // not explicitly included
+        then(failurePredicate.test(new ExtendsError())).isFalse(); // not explicitly included
         then(failurePredicate.test(new ExtendsException()))
-            .isEqualTo(false); // not explicitly included
+            .isFalse(); // not explicitly included
         then(failurePredicate.test(new ExtendsException2()))
-            .isEqualTo(false); // not explicitly included
-        then(failurePredicate.test(new RuntimeException())).isEqualTo(true); // explicitly included
+            .isFalse(); // not explicitly included
+        then(failurePredicate.test(new RuntimeException())).isTrue(); // explicitly included
         then(failurePredicate.test(new ExtendsRuntimeException()))
-            .isEqualTo(true); // inherits included from ExtendsException
+            .isTrue(); // inherits included from ExtendsException
         then(failurePredicate.test(new ExtendsExtendsException()))
-            .isEqualTo(true); // explicitly included
+            .isTrue(); // explicitly included
     }
 
     @Test()
-    public void shouldUseIgnoreExceptionOverRecordToBuildPredicate() {
+    void shouldUseIgnoreExceptionOverRecordToBuildPredicate() {
         RetryConfig retryConfig = RetryConfig.custom()
             .retryExceptions(RuntimeException.class, ExtendsExtendsException.class)
             .ignoreExceptions(ExtendsException.class, ExtendsRuntimeException.class)
             .build();
         final Predicate<? super Throwable> failurePredicate = retryConfig.getExceptionPredicate();
-        then(failurePredicate.test(new Exception())).isEqualTo(false); // not explicitly included
-        then(failurePredicate.test(new ExtendsError())).isEqualTo(false); // not explicitly included
+        then(failurePredicate.test(new Exception())).isFalse(); // not explicitly included
+        then(failurePredicate.test(new ExtendsError())).isFalse(); // not explicitly included
         then(failurePredicate.test(new ExtendsException()))
-            .isEqualTo(false);  // explicitly excluded
+            .isFalse();  // explicitly excluded
         then(failurePredicate.test(new ExtendsException2()))
-            .isEqualTo(false); // not explicitly included
-        then(failurePredicate.test(new RuntimeException())).isEqualTo(true); // explicitly included
+            .isFalse(); // not explicitly included
+        then(failurePredicate.test(new RuntimeException())).isTrue(); // explicitly included
         then(failurePredicate.test(new ExtendsRuntimeException()))
-            .isEqualTo(false); // explicitly excluded
+            .isFalse(); // explicitly excluded
         then(failurePredicate.test(new ExtendsExtendsException()))
-            .isEqualTo(false); // inherits excluded from ExtendsException
+            .isFalse(); // inherits excluded from ExtendsException
     }
 
     @Test()
-    public void shouldUseBothRecordToBuildPredicate() {
+    void shouldUseBothRecordToBuildPredicate() {
         RetryConfig retryConfig = RetryConfig.custom()
             .retryOnException(TEST_PREDICATE) //1
             .retryExceptions(RuntimeException.class, ExtendsExtendsException.class) //2
             .ignoreExceptions(ExtendsException.class, ExtendsRuntimeException.class) //3
             .build();
         final Predicate<? super Throwable> failurePredicate = retryConfig.getExceptionPredicate();
-        then(failurePredicate.test(new Exception())).isEqualTo(false); // not explicitly included
+        then(failurePredicate.test(new Exception())).isFalse(); // not explicitly included
         then(failurePredicate.test(new Exception("test")))
-            .isEqualTo(true); // explicitly included by 1
-        then(failurePredicate.test(new ExtendsError())).isEqualTo(false); // ot explicitly included
+            .isTrue(); // explicitly included by 1
+        then(failurePredicate.test(new ExtendsError())).isFalse(); // ot explicitly included
         then(failurePredicate.test(new ExtendsException()))
-            .isEqualTo(false);  // explicitly excluded by 3
+            .isFalse();  // explicitly excluded by 3
         then(failurePredicate.test(new ExtendsException("test")))
-            .isEqualTo(false);  // explicitly excluded by 3 even if included by 1
+            .isFalse();  // explicitly excluded by 3 even if included by 1
         then(failurePredicate.test(new ExtendsException2()))
-            .isEqualTo(false); // not explicitly included
+            .isFalse(); // not explicitly included
         then(failurePredicate.test(new RuntimeException()))
-            .isEqualTo(true); // explicitly included by 2
+            .isTrue(); // explicitly included by 2
         then(failurePredicate.test(new ExtendsRuntimeException()))
-            .isEqualTo(false); // explicitly excluded by 3
+            .isFalse(); // explicitly excluded by 3
         then(failurePredicate.test(new ExtendsExtendsException()))
-            .isEqualTo(false); // inherits excluded from ExtendsException by 3
+            .isFalse(); // inherits excluded from ExtendsException by 3
     }
 
     @Test()
-    public void shouldBuilderCreateConfigEveryTime() {
-        final RetryConfig.Builder builder = RetryConfig.custom();
+    void shouldBuilderCreateConfigEveryTime() {
+        final RetryConfig.Builder<Object> builder = RetryConfig.custom();
         builder.maxAttempts(5);
         final RetryConfig config1 = builder.build();
         builder.maxAttempts(3);
@@ -204,15 +219,33 @@ public class RetryConfigBuilderTest {
         assertThat(config1.getMaxAttempts()).isEqualTo(5);
     }
 
-    @Test(expected = IllegalStateException.class)
-    public void intervalFunctionUsedWithIntervalBiFunctionShouldFail() {
-        RetryConfig.custom().intervalBiFunction((attempt, either) -> 100L)
-            .intervalFunction(IntervalFunction.ofDefaults())
-            .build();
+    @Test()
+    void intervalFunctionClearIntervalBiFunction() {
+        IntervalBiFunction<Object> biFunction = (attempt, either) -> 100L;
+        IntervalFunction function = IntervalFunction.ofDefaults();
+        RetryConfig config = RetryConfig.custom().intervalBiFunction(biFunction)
+                .intervalFunction(function)
+                .build();
+        assertThat(config).isNotNull();
+        assertThat(config.getIntervalFunction()).isEqualTo(function);
+        assertThat(config.getIntervalBiFunction()).isNotEqualTo(biFunction);
     }
 
     @Test
-    public void shouldUseDefaultIntervalFunction() {
+    void intervalBiFunctionClearIntervalFunction() {
+        IntervalBiFunction<Object> biFunction = (attempt, either) -> 100L;
+        IntervalFunction function = IntervalFunction.ofDefaults();
+        RetryConfig config = RetryConfig.custom().intervalFunction(function)
+                .intervalBiFunction(biFunction)
+                .build();
+        assertThat(config).isNotNull();
+        assertThat(config.getIntervalFunction()).isNull();
+        assertThat(config.getIntervalFunction()).isNotEqualTo(function);
+        assertThat(config.getIntervalBiFunction()).isEqualTo(biFunction);
+    }
+
+    @Test
+    void shouldUseDefaultIntervalFunction() {
         RetryConfig retryConfig = RetryConfig.ofDefaults();
 
         assertThat(retryConfig.getIntervalFunction()).isNotNull();
@@ -221,7 +254,7 @@ public class RetryConfigBuilderTest {
     }
 
     @Test
-    public void shouldUseSetIntervalFunction() {
+    void shouldUseSetIntervalFunction() {
         RetryConfig retryConfig = RetryConfig.custom()
             .intervalFunction(IntervalFunction.of(100L))
             .build();
@@ -232,7 +265,7 @@ public class RetryConfigBuilderTest {
     }
 
     @Test
-    public void shouldUseSetIntervalBiFunction() {
+    void shouldUseSetIntervalBiFunction() {
         RetryConfig retryConfig = RetryConfig.custom()
             .intervalBiFunction(IntervalBiFunction.ofIntervalFunction(IntervalFunction.of(105L)))
             .build();

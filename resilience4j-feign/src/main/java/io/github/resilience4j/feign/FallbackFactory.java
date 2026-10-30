@@ -16,7 +16,7 @@
  */
 package io.github.resilience4j.feign;
 
-import io.vavr.CheckedFunction1;
+import io.github.resilience4j.core.functions.CheckedFunction;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -39,8 +39,8 @@ class FallbackFactory<T> implements FallbackHandler<T> {
     }
 
     @Override
-    public CheckedFunction1<Object[], Object> decorate(
-        CheckedFunction1<Object[], Object> invocationCall,
+    public CheckedFunction<Object[], Object> decorate(
+        CheckedFunction<Object[], Object> invocationCall,
         Method method,
         Predicate<Exception> filter) {
         return args -> {
@@ -49,8 +49,7 @@ class FallbackFactory<T> implements FallbackHandler<T> {
             } catch (Exception exception) {
                 if (filter.test(exception)) {
                     T fallbackInstance = fallbackSupplier.apply(exception);
-                    validateFallback(fallbackInstance, method);
-                    Method fallbackMethod = getFallbackMethod(fallbackInstance, method);
+                    Method fallbackMethod = validateAndGetFallbackMethod(fallbackInstance, method);
                     try {
                         return fallbackMethod.invoke(fallbackInstance, args);
                     } catch (InvocationTargetException e) {

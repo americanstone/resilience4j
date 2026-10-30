@@ -24,7 +24,6 @@ import reactor.core.publisher.Mono;
 
 import java.util.function.UnaryOperator;
 
-
 /**
  * A RateLimiter operator which checks if a downstream subscriber/observer can acquire a permission
  * to subscribe to an upstream Publisher. Otherwise emits a {@link RequestNotPermitted} if the rate
@@ -35,9 +34,11 @@ import java.util.function.UnaryOperator;
 public class RateLimiterOperator<T> implements UnaryOperator<Publisher<T>> {
 
     private final RateLimiter rateLimiter;
+    private final int permits;
 
-    private RateLimiterOperator(RateLimiter rateLimiter) {
+    private RateLimiterOperator(RateLimiter rateLimiter, int permits) {
         this.rateLimiter = rateLimiter;
+        this.permits = permits;
     }
 
     /**
@@ -48,15 +49,27 @@ public class RateLimiterOperator<T> implements UnaryOperator<Publisher<T>> {
      * @return a RateLimiterOperator
      */
     public static <T> RateLimiterOperator<T> of(RateLimiter rateLimiter) {
-        return new RateLimiterOperator<>(rateLimiter);
+        return new RateLimiterOperator<>(rateLimiter, 1);
+    }
+
+    /**
+     * Creates a RateLimiterOperator with custom call weight.
+     *
+     * @param <T>         the value type of the upstream and downstream
+     * @param rateLimiter the Rate limiter
+     * @param permits     number of permits - use for systems where 1 call != 1 permit
+     * @return a RateLimiterOperator
+     */
+    public static <T> RateLimiterOperator<T> of(RateLimiter rateLimiter, int permits) {
+        return new RateLimiterOperator<>(rateLimiter, permits);
     }
 
     @Override
     public Publisher<T> apply(Publisher<T> publisher) {
         if (publisher instanceof Mono) {
-            return new MonoRateLimiter<>((Mono<? extends T>) publisher, rateLimiter);
+            return new MonoRateLimiter<>((Mono<? extends T>) publisher, rateLimiter, permits);
         } else if (publisher instanceof Flux) {
-            return new FluxRateLimiter<>((Flux<? extends T>) publisher, rateLimiter);
+            return new FluxRateLimiter<>((Flux<? extends T>) publisher, rateLimiter, permits);
         } else {
             throw new IllegalPublisherException(publisher);
         }

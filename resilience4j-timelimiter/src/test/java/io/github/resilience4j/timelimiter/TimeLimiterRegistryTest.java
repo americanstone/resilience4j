@@ -6,30 +6,33 @@ import io.github.resilience4j.core.Registry;
 import io.github.resilience4j.core.registry.EntryAddedEvent;
 import io.github.resilience4j.core.registry.EntryRemovedEvent;
 import io.github.resilience4j.core.registry.EntryReplacedEvent;
+import io.github.resilience4j.core.registry.InMemoryRegistryStore;
 import io.github.resilience4j.core.registry.RegistryEventConsumer;
-import io.vavr.Tuple;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-
-public class TimeLimiterRegistryTest {
+class TimeLimiterRegistryTest {
 
     private static Optional<EventProcessor<?>> getEventProcessor(
         Registry.EventPublisher<TimeLimiter> eventPublisher) {
         if (eventPublisher instanceof EventProcessor<?>) {
             return Optional.of((EventProcessor<?>) eventPublisher);
         }
-
         return Optional.empty();
     }
 
     @Test
-    public void testCreateWithCustomConfig() {
+    void createWithCustomConfig() {
         TimeLimiterConfig config = TimeLimiterConfig.custom()
             .cancelRunningFuture(false)
             .timeoutDuration(Duration.ofMillis(500))
@@ -42,85 +45,77 @@ public class TimeLimiterRegistryTest {
     }
 
     @Test
-    public void shouldInitRegistryTags() {
+    void shouldInitRegistryTags() {
         TimeLimiterConfig timeLimiterConfig = TimeLimiterConfig.ofDefaults();
         Map<String, TimeLimiterConfig> timeLimiterConfigs = Collections
             .singletonMap("default", timeLimiterConfig);
-        TimeLimiterRegistry registry = TimeLimiterRegistry.of(timeLimiterConfigs, new NoOpTimeLimiterEventConsumer(),io.vavr.collection.HashMap.of("Tag1Key","Tag1Value"));
+        TimeLimiterRegistry registry = TimeLimiterRegistry.of(timeLimiterConfigs, new NoOpTimeLimiterEventConsumer(), Map.of("Tag1Key", "Tag1Value"));
         assertThat(registry.getTags()).isNotEmpty();
-        assertThat(registry.getTags()).containsOnly(Tuple.of("Tag1Key","Tag1Value"));
+        assertThat(registry.getTags()).containsOnly(Map.entry("Tag1Key", "Tag1Value"));
     }
 
     @Test
-    public void noTagsByDefault() {
-        TimeLimiter TimeLimiter = TimeLimiterRegistry.ofDefaults()
+    void noTagsByDefault() {
+        TimeLimiter timeLimiter = TimeLimiterRegistry.ofDefaults()
             .timeLimiter("testName");
-        assertThat(TimeLimiter.getTags()).hasSize(0);
+        assertThat(timeLimiter.getTags()).isEmpty();
     }
 
     @Test
-    public void tagsOfRegistryAddedToInstance() {
+    void tagsOfRegistryAddedToInstance() {
         TimeLimiterConfig timeLimiterConfig = TimeLimiterConfig.ofDefaults();
         Map<String, TimeLimiterConfig> timeLimiterConfigs = Collections
             .singletonMap("default", timeLimiterConfig);
-        io.vavr.collection.Map<String, String> timeLimiterTags = io.vavr.collection.HashMap
-            .of("key1", "value1", "key2", "value2");
+        Map<String, String> timeLimiterTags = Map.of("key1", "value1", "key2", "value2");
         TimeLimiterRegistry timeLimiterRegistry = TimeLimiterRegistry
             .of(timeLimiterConfigs, timeLimiterTags);
-        TimeLimiter TimeLimiter = timeLimiterRegistry.timeLimiter("testName");
+        TimeLimiter timeLimiter = timeLimiterRegistry.timeLimiter("testName");
 
-        assertThat(TimeLimiter.getTags()).containsOnlyElementsOf(timeLimiterTags);
+        assertThat(timeLimiter.getTags()).containsAllEntriesOf(timeLimiterTags);
     }
 
     @Test
-    public void tagsAddedToInstance() {
+    void tagsAddedToInstance() {
         TimeLimiterRegistry timeLimiterRegistry = TimeLimiterRegistry.ofDefaults();
-        io.vavr.collection.Map<String, String> timeLimiterTags = io.vavr.collection.HashMap
-            .of("key1", "value1", "key2", "value2");
-        TimeLimiter TimeLimiter = timeLimiterRegistry
-            .timeLimiter("testName", timeLimiterTags);
+        Map<String, String> timeLimiterTags = Map.of("key1", "value1", "key2", "value2");
+        TimeLimiter timeLimiter = timeLimiterRegistry.timeLimiter("testName", timeLimiterTags);
 
-        assertThat(TimeLimiter.getTags()).containsOnlyElementsOf(timeLimiterTags);
+        assertThat(timeLimiter.getTags()).containsAllEntriesOf(timeLimiterTags);
     }
 
     @Test
-    public void tagsOfTimeLimitersShouldNotBeMixed() {
+    void tagsOfTimeLimitersShouldNotBeMixed() {
         TimeLimiterRegistry timeLimiterRegistry = TimeLimiterRegistry.ofDefaults();
         TimeLimiterConfig timeLimiterConfig = TimeLimiterConfig.ofDefaults();
-        io.vavr.collection.Map<String, String> timeLimiterTags = io.vavr.collection.HashMap
-            .of("key1", "value1", "key2", "value2");
-        TimeLimiter TimeLimiter = timeLimiterRegistry
+        Map<String, String> timeLimiterTags = Map.of("key1", "value1", "key2", "value2");
+        TimeLimiter timeLimiter = timeLimiterRegistry
             .timeLimiter("testName", timeLimiterConfig, timeLimiterTags);
-        io.vavr.collection.Map<String, String> timeLimiterTags2 = io.vavr.collection.HashMap
-            .of("key3", "value3", "key4", "value4");
-        TimeLimiter TimeLimiter2 = timeLimiterRegistry
+        Map<String, String> timeLimiterTags2 = Map.of("key3", "value3", "key4", "value4");
+        TimeLimiter timeLimiter2 = timeLimiterRegistry
             .timeLimiter("otherTestName", timeLimiterConfig, timeLimiterTags2);
 
-        assertThat(TimeLimiter.getTags()).containsOnlyElementsOf(timeLimiterTags);
-        assertThat(TimeLimiter2.getTags()).containsOnlyElementsOf(timeLimiterTags2);
+        assertThat(timeLimiter.getTags()).containsAllEntriesOf(timeLimiterTags);
+        assertThat(timeLimiter2.getTags()).containsAllEntriesOf(timeLimiterTags2);
     }
 
     @Test
-    public void tagsOfInstanceTagsShouldOverrideRegistryTags() {
+    void tagsOfInstanceTagsShouldOverrideRegistryTags() {
         TimeLimiterConfig timeLimiterConfig = TimeLimiterConfig.ofDefaults();
         Map<String, TimeLimiterConfig> timeLimiterConfigs = Collections
             .singletonMap("default", timeLimiterConfig);
-        io.vavr.collection.Map<String, String> timeLimiterTags = io.vavr.collection.HashMap
-            .of("key1", "value1", "key2", "value2");
-        io.vavr.collection.Map<String, String> instanceTags = io.vavr.collection.HashMap
-            .of("key1", "value3", "key4", "value4");
+        Map<String, String> timeLimiterTags = Map.of("key1", "value1", "key2", "value2");
+        Map<String, String> instanceTags = Map.of("key1", "value3", "key4", "value4");
         TimeLimiterRegistry timeLimiterRegistry = TimeLimiterRegistry
             .of(timeLimiterConfigs, timeLimiterTags);
         TimeLimiter timeLimiter = timeLimiterRegistry
             .timeLimiter("testName", timeLimiterConfig, instanceTags);
 
-        io.vavr.collection.Map<String, String> expectedTags = io.vavr.collection.HashMap
-            .of("key1", "value3", "key2", "value2", "key4", "value4");
-        assertThat(timeLimiter.getTags()).containsOnlyElementsOf(expectedTags);
+        Map<String, String> expectedTags = Map.of("key1", "value3", "key2", "value2", "key4", "value4");
+        assertThat(timeLimiter.getTags()).containsAllEntriesOf(expectedTags);
     }
 
     @Test
-    public void testCreateWithConfigurationMap() {
+    void createWithConfigurationMap() {
         Map<String, TimeLimiterConfig> configs = new HashMap<>();
         configs.put("default", TimeLimiterConfig.ofDefaults());
         configs.put("custom", TimeLimiterConfig.ofDefaults());
@@ -132,7 +127,7 @@ public class TimeLimiterRegistryTest {
     }
 
     @Test
-    public void testCreateWithConfigurationMapWithoutDefaultConfig() {
+    void createWithConfigurationMapWithoutDefaultConfig() {
         Map<String, TimeLimiterConfig> configs = new HashMap<>();
         configs.put("custom", TimeLimiterConfig.ofDefaults());
 
@@ -143,7 +138,7 @@ public class TimeLimiterRegistryTest {
     }
 
     @Test
-    public void testCreateWithSingleRegistryEventConsumer() {
+    void createWithSingleRegistryEventConsumer() {
         TimeLimiterRegistry timeLimiterRegistry = TimeLimiterRegistry
             .of(TimeLimiterConfig.ofDefaults(), new NoOpTimeLimiterEventConsumer());
 
@@ -152,7 +147,7 @@ public class TimeLimiterRegistryTest {
     }
 
     @Test
-    public void testCreateWithMultipleRegistryEventConsumer() {
+    void createWithMultipleRegistryEventConsumer() {
         List<RegistryEventConsumer<TimeLimiter>> registryEventConsumers = new ArrayList<>();
         registryEventConsumers.add(new NoOpTimeLimiterEventConsumer());
         registryEventConsumers.add(new NoOpTimeLimiterEventConsumer());
@@ -165,7 +160,7 @@ public class TimeLimiterRegistryTest {
     }
 
     @Test
-    public void testCreateWithConfigurationMapWithSingleRegistryEventConsumer() {
+    void createWithConfigurationMapWithSingleRegistryEventConsumer() {
         Map<String, TimeLimiterConfig> configs = new HashMap<>();
         configs.put("custom", TimeLimiterConfig.ofDefaults());
 
@@ -177,7 +172,7 @@ public class TimeLimiterRegistryTest {
     }
 
     @Test
-    public void testCreateWithConfigurationMapWithMultiRegistryEventConsumer() {
+    void createWithConfigurationMapWithMultiRegistryEventConsumer() {
         Map<String, TimeLimiterConfig> configs = new HashMap<>();
         configs.put("custom", TimeLimiterConfig.ofDefaults());
 
@@ -193,7 +188,7 @@ public class TimeLimiterRegistryTest {
     }
 
     @Test
-    public void testAddConfiguration() {
+    void addConfiguration() {
         TimeLimiterRegistry timeLimiterRegistry = TimeLimiterRegistry.ofDefaults();
         timeLimiterRegistry.addConfiguration("custom", TimeLimiterConfig.custom().build());
 
@@ -202,15 +197,132 @@ public class TimeLimiterRegistryTest {
     }
 
     @Test
-    public void testWithNotExistingConfig() {
+    void withNotExistingConfig() {
         TimeLimiterRegistry timeLimiterRegistry = TimeLimiterRegistry.ofDefaults();
 
         assertThatThrownBy(() -> timeLimiterRegistry.timeLimiter("test", "doesNotExist"))
             .isInstanceOf(ConfigurationNotFoundException.class);
     }
 
-    private static class NoOpTimeLimiterEventConsumer implements
-        RegistryEventConsumer<TimeLimiter> {
+    @Test
+    void createUsingBuilderWithDefaultConfig() {
+        TimeLimiterRegistry timeLimiterRegistry =
+            TimeLimiterRegistry.custom().withTimeLimiterConfig(TimeLimiterConfig.ofDefaults()).build();
+        TimeLimiter timeLimiter = timeLimiterRegistry.timeLimiter("testName");
+        TimeLimiter timeLimiter2 = timeLimiterRegistry.timeLimiter("otherTestName");
+        assertThat(timeLimiter).isNotSameAs(timeLimiter2);
+
+        assertThat(timeLimiterRegistry.getAllTimeLimiters()).hasSize(2);
+    }
+
+    @Test
+    void createUsingBuilderWithCustomConfig() {
+        Duration durationForPeriod = Duration.ofSeconds(10);
+        TimeLimiterConfig timeLimiterConfig = TimeLimiterConfig.custom()
+            .timeoutDuration(durationForPeriod).build();
+
+        TimeLimiterRegistry timeLimiterRegistry =
+            TimeLimiterRegistry.custom().withTimeLimiterConfig(timeLimiterConfig).build();
+        TimeLimiter timeLimiter = timeLimiterRegistry.timeLimiter("testName");
+
+        assertThat(timeLimiter.getTimeLimiterConfig().getTimeoutDuration())
+            .isEqualTo(durationForPeriod);
+    }
+
+    @Test
+    void createUsingBuilderWithoutDefaultConfig() {
+        Duration durationForPeriod = Duration.ofSeconds(10);
+        TimeLimiterConfig timeLimiterConfig = TimeLimiterConfig.custom()
+            .timeoutDuration(durationForPeriod).build();
+
+        TimeLimiterRegistry timeLimiterRegistry =
+            TimeLimiterRegistry.custom().addTimeLimiterConfig("someSharedConfig", timeLimiterConfig).build();
+
+        assertThat(timeLimiterRegistry.getDefaultConfig()).isNotNull();
+        assertThat(timeLimiterRegistry.getDefaultConfig().getTimeoutDuration())
+            .isEqualTo(Duration.ofSeconds(1));
+        assertThat(timeLimiterRegistry.getConfiguration("someSharedConfig")).isPresent();
+
+        TimeLimiter timeLimiter = timeLimiterRegistry.timeLimiter("name", "someSharedConfig");
+
+        assertThat(timeLimiter.getTimeLimiterConfig()).isEqualTo(timeLimiterConfig);
+        assertThat(timeLimiter.getTimeLimiterConfig().getTimeoutDuration())
+            .isEqualTo(durationForPeriod);
+    }
+
+    @Test
+    void addMultipleDefaultConfigUsingBuilderShouldThrowException() {
+        TimeLimiterConfig timeLimiterConfig = TimeLimiterConfig.custom()
+            .timeoutDuration(Duration.ofSeconds(10)).build();
+        assertThatThrownBy(() -> TimeLimiterRegistry.custom()
+            .addTimeLimiterConfig("default", timeLimiterConfig).build())
+            .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void createUsingBuilderWithDefaultAndCustomConfig() {
+        Duration defaultDuration = Duration.ofSeconds(10);
+        TimeLimiterConfig timeLimiterConfig = TimeLimiterConfig.custom()
+            .timeoutDuration(defaultDuration).build();
+        TimeLimiterConfig customTimeLimiterConfig = TimeLimiterConfig.custom()
+            .timeoutDuration(Duration.ofSeconds(20)).build();
+
+        TimeLimiterRegistry timeLimiterRegistry = TimeLimiterRegistry.custom()
+            .withTimeLimiterConfig(timeLimiterConfig)
+            .addTimeLimiterConfig("custom", customTimeLimiterConfig)
+            .build();
+
+        assertThat(timeLimiterRegistry.getDefaultConfig()).isNotNull();
+        assertThat(timeLimiterRegistry.getDefaultConfig().getTimeoutDuration())
+            .isEqualTo(defaultDuration);
+        assertThat(timeLimiterRegistry.getConfiguration("custom")).isPresent();
+    }
+
+    @Test
+    void createUsingBuilderWithNullConfig() {
+        assertThatThrownBy(
+            () -> TimeLimiterRegistry.custom().withTimeLimiterConfig(null).build())
+            .isInstanceOf(NullPointerException.class).hasMessage("Config must not be null");
+    }
+
+    @Test
+    void createUsingBuilderWithMultipleRegistryEventConsumer() {
+        TimeLimiterRegistry timeLimiterRegistry = TimeLimiterRegistry.custom()
+            .withTimeLimiterConfig(TimeLimiterConfig.ofDefaults())
+            .addRegistryEventConsumer(new NoOpTimeLimiterEventConsumer())
+            .addRegistryEventConsumer(new NoOpTimeLimiterEventConsumer())
+            .build();
+
+        getEventProcessor(timeLimiterRegistry.getEventPublisher())
+            .ifPresent(eventProcessor -> assertThat(eventProcessor.hasConsumers()).isTrue());
+    }
+
+    @Test
+    void createUsingBuilderWithRegistryTags() {
+        Map<String, String> timeLimiterTags = Map.of("key1", "value1", "key2", "value2");
+        TimeLimiterRegistry timeLimiterRegistry = TimeLimiterRegistry.custom()
+            .withTimeLimiterConfig(TimeLimiterConfig.ofDefaults())
+            .withTags(timeLimiterTags)
+            .build();
+        TimeLimiter timeLimiter = timeLimiterRegistry.timeLimiter("testName");
+
+        assertThat(timeLimiter.getTags()).containsAllEntriesOf(timeLimiterTags);
+    }
+
+    @Test
+    void createUsingBuilderWithRegistryStore() {
+        TimeLimiterRegistry timeLimiterRegistry = TimeLimiterRegistry.custom()
+            .withTimeLimiterConfig(TimeLimiterConfig.ofDefaults())
+            .withRegistryStore(new InMemoryRegistryStore<>())
+            .build();
+        TimeLimiter timeLimiter = timeLimiterRegistry.timeLimiter("testName");
+        TimeLimiter timeLimiter2 = timeLimiterRegistry.timeLimiter("otherTestName");
+
+        assertThat(timeLimiter).isNotSameAs(timeLimiter2);
+        assertThat(timeLimiterRegistry.getAllTimeLimiters()).hasSize(2);
+    }
+
+    private static class NoOpTimeLimiterEventConsumer implements RegistryEventConsumer<TimeLimiter> {
 
         @Override
         public void onEntryAddedEvent(EntryAddedEvent<TimeLimiter> entryAddedEvent) {

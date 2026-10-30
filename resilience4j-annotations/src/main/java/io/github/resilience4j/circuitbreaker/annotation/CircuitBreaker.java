@@ -31,16 +31,28 @@ public @interface CircuitBreaker {
 
     /**
      * Name of the circuit breaker.
-     * It can be SpEL expression. If you want to use first parameter of the method as name, you can
-     * express it {@code #root.args[0]}, {@code #p0} or {@code #a0}. And method name can be accessed via
-     * {@code #root.methodName}
+     * It can be SpEL expression.
+     * <ul>
+     * <li>If you want to use the first parameter of the method as name, you can
+     * express it as {@code #root.args[0]}, {@code #p0} or {@code #a0}.</li>
+     * <li>The method and class name can be accessed via {@code #root.methodName} and {@code #root.className}.</li>
+     * <li>To invoke a method on a Spring bean, pass {@code @yourBean.yourMethod(#a0)}.</li>
+     * </ul>
      *
      * @return the name of the circuit breaker
      */
     String name();
 
     /**
+     * Configuration key to use if name is given as a SpEL expression share the same configuration
+     * @return the configuration key
+     */
+    String configuration() default "";
+
+    /**
      * fallbackMethod method name.
+     * It can be a SpEL expression. Use {@code "beanName::methodName"} to reference
+     * a fallback method on an external Spring bean.
      *
      * @return fallbackMethod method name.
      */
